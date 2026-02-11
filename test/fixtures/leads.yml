@@ -1,0 +1,27 @@
+# Read about fixtures at https://api.rubyonrails.org/classes/ActiveRecord/FixtureSet.html
+
+one:
+  organization: one
+  name: MyString
+  platform: MyString
+  handle: MyString
+  email: MyString
+  status: new
+  score: 1
+  source: MyString
+  role: MyString
+  country: MyString
+  notes: MyText
+
+two:
+  organization: two
+  name: MyString
+  platform: MyString
+  handle: MyString
+  email: MyString
+  status: contacted
+  score: 1
+  source: MyString
+  role: MyString
+  country: MyString
+  notes: MyText
