@@ -1,6 +1,42 @@
 import React, { useEffect, useMemo, useState } from "react"
 import { apiRequest } from "./api"
 
+const OUTREACH_STATUSES = new Set(["contacted", "engaged", "interested", "onboarding", "active"])
+
+const toDayKey = (dateValue) => {
+  const date = new Date(dateValue)
+  if (Number.isNaN(date.getTime())) return null
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, "0")
+  const day = String(date.getDate()).padStart(2, "0")
+  return `${year}-${month}-${day}`
+}
+
+const buildLastSevenDays = () => {
+  const days = []
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+
+  for (let i = 6; i >= 0; i -= 1) {
+    const date = new Date(today)
+    date.setDate(today.getDate() - i)
+    days.push({
+      key: toDayKey(date),
+      label: date.toLocaleDateString("en-US", { weekday: "short" })
+    })
+  }
+
+  return days
+}
+
+const platformBucket = (platform) => {
+  const value = (platform || "").toString().toLowerCase()
+  if (value.includes("youtube")) return "youtube"
+  if (value.includes("x") || value.includes("twitter")) return "x"
+  if (value.includes("linkedin")) return "linkedin"
+  return "other"
+}
+
 export default function DashboardView() {
   const [leads, setLeads] = useState([])
   const [loading, setLoading] = useState(true)
@@ -14,23 +50,95 @@ export default function DashboardView() {
   const summary = useMemo(() => {
     const total = leads.length
     const whiteGlove = leads.filter((lead) => (lead.score || 0) >= 6).length
-    const contacted = leads.filter((lead) => lead.status === "contacted").length
+    const contacted = leads.filter((lead) => ["contacted", "engaged"].includes(lead.status)).length
     return { total, whiteGlove, contacted }
   }, [leads])
 
   const recentLeads = leads.slice(0, 5)
-  const activity = {
-    leads: [3, 5, 4, 6, 8, 5, 7],
-    outreach: [1, 2, 1, 3, 2, 4, 3]
-  }
-  const lineSeries = [4, 6, 5, 7, 9, 8, 10]
-  const days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-  const partnershipWatch = [
-    { name: "Glibatree", subs: "55k", focus: "Workflow Architect" },
-    { name: "Theoretically Media", subs: "170k", focus: "Credibility / Tutorials" },
-    { name: "Curious Refuge", subs: "240k", focus: "Festival + Creator" },
-    { name: "Lenny Blomde", subs: "7k", focus: "Viral Tutorials" }
-  ]
+
+  const chartData = useMemo(() => {
+    const days = buildLastSevenDays()
+    const leadsPerDay = Object.fromEntries(days.map((day) => [day.key, 0]))
+    const outreachPerDay = Object.fromEntries(days.map((day) => [day.key, 0]))
+    const scoreSumPerDay = Object.fromEntries(days.map((day) => [day.key, 0]))
+    const scoreCountPerDay = Object.fromEntries(days.map((day) => [day.key, 0]))
+
+    const channelMix = {
+      youtube: 0,
+      x: 0,
+      linkedin: 0,
+      other: 0
+    }
+
+    leads.forEach((lead) => {
+      const createdKey = toDayKey(lead.created_at)
+      const updatedKey = toDayKey(lead.updated_at)
+
+      if (createdKey && leadsPerDay[createdKey] != null) {
+        leadsPerDay[createdKey] += 1
+      }
+
+      if (
+        updatedKey &&
+        outreachPerDay[updatedKey] != null &&
+        OUTREACH_STATUSES.has((lead.status || "").toString())
+      ) {
+        outreachPerDay[updatedKey] += 1
+      }
+
+      const numericScore = Number(lead.score)
+      if (createdKey && scoreSumPerDay[createdKey] != null && Number.isFinite(numericScore)) {
+        scoreSumPerDay[createdKey] += numericScore
+        scoreCountPerDay[createdKey] += 1
+      }
+
+      channelMix[platformBucket(lead.platform)] += 1
+    })
+
+    const leadSeries = days.map((day) => leadsPerDay[day.key] || 0)
+    const outreachSeries = days.map((day) => outreachPerDay[day.key] || 0)
+
+    let rollingSum = 0
+    let rollingCount = 0
+    const scoreTrendSeries = days.map((day) => {
+      rollingSum += scoreSumPerDay[day.key] || 0
+      rollingCount += scoreCountPerDay[day.key] || 0
+      if (rollingCount === 0) return 0
+      return Number((rollingSum / rollingCount).toFixed(1))
+    })
+
+    const mixTotal = channelMix.youtube + channelMix.x + channelMix.linkedin + channelMix.other
+    const mixPercent = mixTotal > 0
+      ? {
+          youtube: (channelMix.youtube / mixTotal) * 100,
+          x: (channelMix.x / mixTotal) * 100,
+          linkedin: (channelMix.linkedin / mixTotal) * 100,
+          other: (channelMix.other / mixTotal) * 100
+        }
+      : { youtube: 0, x: 0, linkedin: 0, other: 0 }
+
+    return {
+      dayLabels: days.map((day) => day.label),
+      activity: { leads: leadSeries, outreach: outreachSeries },
+      scoreTrendSeries,
+      channelMix,
+      mixPercent
+    }
+  }, [leads])
+
+  const partnershipWatch = useMemo(
+    () =>
+      leads
+        .filter((lead) => ["youtube", "x"].includes(platformBucket(lead.platform)))
+        .sort((a, b) => {
+          const scoreDiff = (b.score || 0) - (a.score || 0)
+          if (scoreDiff !== 0) return scoreDiff
+          return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+        })
+        .slice(0, 4),
+    [leads]
+  )
+
   const signalFeed = [
     { time: "Today", title: "AI short film posted on YouTube", tag: "Signal" },
     { time: "Yesterday", title: "New ComfyUI workflow breakdown", tag: "Workflow" },
@@ -106,9 +214,9 @@ export default function DashboardView() {
               <span>Leads added</span>
               <strong>Last 7 days</strong>
             </div>
-            <div className="bar-chart">{renderBars(activity.leads, "primary")}</div>
+            <div className="bar-chart">{renderBars(chartData.activity.leads, "primary")}</div>
             <div className="chart-labels">
-              {days.map((day) => (
+              {chartData.dayLabels.map((day) => (
                 <span key={`leads-${day}`}>{day}</span>
               ))}
             </div>
@@ -118,9 +226,9 @@ export default function DashboardView() {
               <span>Outreach touches</span>
               <strong>Last 7 days</strong>
             </div>
-            <div className="bar-chart">{renderBars(activity.outreach, "secondary")}</div>
+            <div className="bar-chart">{renderBars(chartData.activity.outreach, "secondary")}</div>
             <div className="chart-labels">
-              {days.map((day) => (
+              {chartData.dayLabels.map((day) => (
                 <span key={`outreach-${day}`}>{day}</span>
               ))}
             </div>
@@ -128,7 +236,7 @@ export default function DashboardView() {
           <div className="chart-card">
             <div className="chart-header">
               <span>Momentum</span>
-              <strong>Lead score trend</strong>
+              <strong>Avg score trend</strong>
             </div>
             <div className="line-chart">
               <svg viewBox="0 0 100 100" preserveAspectRatio="none">
@@ -138,12 +246,12 @@ export default function DashboardView() {
                   strokeWidth="4"
                   strokeLinecap="round"
                   strokeLinejoin="round"
-                  points={renderLinePath(lineSeries)}
+                  points={renderLinePath(chartData.scoreTrendSeries)}
                 />
               </svg>
             </div>
             <div className="chart-labels">
-              {days.map((day) => (
+              {chartData.dayLabels.map((day) => (
                 <span key={`trend-${day}`}>{day}</span>
               ))}
             </div>
@@ -197,15 +305,18 @@ export default function DashboardView() {
           </div>
         </div>
         <div className="watch-list">
-          {partnershipWatch.map((channel) => (
-            <div key={channel.name} className="watch-item">
+          {partnershipWatch.map((lead) => (
+            <div key={lead.id} className="watch-item">
               <div>
-                <strong>{channel.name}</strong>
-                <span className="muted">{channel.focus}</span>
+                <strong>{lead.name}</strong>
+                <span className="muted">{lead.role || lead.platform || "Prospect"}</span>
               </div>
-              <span className="pill">{channel.subs} subs</span>
+              <span className="pill">score {lead.score ?? 0}</span>
             </div>
           ))}
+          {partnershipWatch.length === 0 && (
+            <p className="empty-state">No X/YouTube prospects yet.</p>
+          )}
         </div>
       </section>
 
@@ -220,23 +331,68 @@ export default function DashboardView() {
           <div className="pie-chart">
             <svg viewBox="0 0 42 42" className="pie">
               <circle className="pie-bg" cx="21" cy="21" r="15.915" />
-              <circle className="pie-seg seg-one" cx="21" cy="21" r="15.915" />
-              <circle className="pie-seg seg-two" cx="21" cy="21" r="15.915" />
-              <circle className="pie-seg seg-three" cx="21" cy="21" r="15.915" />
+              <circle
+                className="pie-seg seg-one"
+                cx="21"
+                cy="21"
+                r="15.915"
+                style={{
+                  strokeDasharray: `${chartData.mixPercent.youtube} ${100 - chartData.mixPercent.youtube}`,
+                  strokeDashoffset: 0
+                }}
+              />
+              <circle
+                className="pie-seg seg-two"
+                cx="21"
+                cy="21"
+                r="15.915"
+                style={{
+                  strokeDasharray: `${chartData.mixPercent.x} ${100 - chartData.mixPercent.x}`,
+                  strokeDashoffset: -chartData.mixPercent.youtube
+                }}
+              />
+              <circle
+                className="pie-seg seg-three"
+                cx="21"
+                cy="21"
+                r="15.915"
+                style={{
+                  strokeDasharray: `${chartData.mixPercent.linkedin} ${100 - chartData.mixPercent.linkedin}`,
+                  strokeDashoffset: -(chartData.mixPercent.youtube + chartData.mixPercent.x)
+                }}
+              />
+              <circle
+                className="pie-seg seg-four"
+                cx="21"
+                cy="21"
+                r="15.915"
+                style={{
+                  strokeDasharray: `${chartData.mixPercent.other} ${100 - chartData.mixPercent.other}`,
+                  strokeDashoffset: -(
+                    chartData.mixPercent.youtube +
+                    chartData.mixPercent.x +
+                    chartData.mixPercent.linkedin
+                  )
+                }}
+              />
             </svg>
           </div>
           <div className="pie-legend">
             <div>
               <span className="legend-swatch swatch-one"></span>
-              YouTube
+              YouTube ({chartData.channelMix.youtube})
             </div>
             <div>
               <span className="legend-swatch swatch-two"></span>
-              X (Twitter)
+              X (Twitter) ({chartData.channelMix.x})
             </div>
             <div>
               <span className="legend-swatch swatch-three"></span>
-              Web / Other
+              LinkedIn ({chartData.channelMix.linkedin})
+            </div>
+            <div>
+              <span className="legend-swatch swatch-four"></span>
+              Web / Other ({chartData.channelMix.other})
             </div>
           </div>
         </div>

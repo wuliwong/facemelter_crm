@@ -56,10 +56,16 @@ const updateTabInUrl = (tab, method = "pushState") => {
   window.history[method]({}, "", url)
 }
 
+const assetFromMeta = (metaName, fallback) => {
+  if (typeof document === "undefined") return fallback
+  return document.querySelector(`meta[name="${metaName}"]`)?.content || fallback
+}
+
 export default function App() {
   const [activeTab, setActiveTab] = useState(getTabFromLocation)
   const [session, setSession] = useState({ loading: true, user: null, organization: null })
   const [leadSearch, setLeadSearch] = useState("")
+  const brandIconSrc = assetFromMeta("asset-facemelter-icon", "/assets/facemelter_icon.jpeg")
 
   useEffect(() => {
     apiRequest("/api/me")
@@ -98,10 +104,11 @@ export default function App() {
     <div className="app-shell">
       <aside className="sidebar">
         <div className="brand">
-          <div className="brand-mark">FM</div>
-          <div>
-            <h1>Facemelter CRM</h1>
-          </div>
+          <img
+            className="brand-icon"
+            src={brandIconSrc}
+            alt="Facemelter icon"
+          />
         </div>
 
         <nav className="side-nav">

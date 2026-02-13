@@ -2,7 +2,10 @@ module Api
   class LeadsController < BaseController
     def index
       leads = current_organization.leads.order(created_at: :desc)
-      render json: { leads: leads.as_json(only: lead_fields) }
+      render json: {
+        leads: leads.as_json(only: lead_fields),
+        ai_category_options: Lead::AI_CATEGORY_VALUES
+      }
     end
 
     def show
@@ -38,7 +41,7 @@ module Api
 
     def requalify
       lead = current_organization.leads.find(params[:id])
-      LeadQualifyJob.perform_later(lead.id, force: true)
+      LeadQualifyJob.perform_later(lead.id, force: true, score_only: true)
       render json: { status: "queued" }
     end
 
@@ -55,7 +58,8 @@ module Api
         :source,
         :role,
         :country,
-        :notes
+        :notes,
+        :ai_category
       )
     end
 

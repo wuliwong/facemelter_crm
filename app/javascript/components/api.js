@@ -1,22 +1,28 @@
-const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content
-
 const defaultHeaders = {
-  Accept: "application/json",
-  "Content-Type": "application/json"
+  Accept: "application/json"
 }
 
-if (csrfToken) {
-  defaultHeaders["X-CSRF-Token"] = csrfToken
-}
+const getCsrfToken = () => document.querySelector('meta[name="csrf-token"]')?.content
 
 export async function apiRequest(path, options = {}) {
+  const headers = {
+    ...defaultHeaders,
+    ...(options.headers || {})
+  }
+
+  if (!(options.body instanceof FormData)) {
+    headers["Content-Type"] = headers["Content-Type"] || "application/json"
+  }
+
+  const csrfToken = getCsrfToken()
+  if (csrfToken) {
+    headers["X-CSRF-Token"] = csrfToken
+  }
+
   const config = {
     credentials: "same-origin",
     ...options,
-    headers: {
-      ...defaultHeaders,
-      ...(options.headers || {})
-    }
+    headers
   }
 
   if (config.body && typeof config.body !== "string") {

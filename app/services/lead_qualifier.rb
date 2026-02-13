@@ -1,14 +1,5 @@
 class LeadQualifier
-  CATEGORIES = %w[
-    ai_filmmaker
-    studio_or_agency
-    news_or_aggregator
-    tool_company
-    educator_or_tutorial
-    community_org
-    other
-    unknown
-  ].freeze
+  CATEGORIES = Lead::AI_CATEGORY_VALUES.freeze
 
   RECENCY_WINDOW = 12.hours
 
@@ -16,7 +7,7 @@ class LeadQualifier
     @client = client
   end
 
-  def qualify!(lead, force: false)
+  def qualify!(lead, force: false, score_only: false)
     if !force && lead.ai_last_scored_at && lead.ai_last_scored_at > RECENCY_WINDOW.ago
       Rails.logger.info("LeadQualifier skip: lead_id=#{lead.id} recent_score=#{lead.ai_last_scored_at}")
       return :skipped
@@ -25,43 +16,54 @@ class LeadQualifier
     signals = lead.signals.order(captured_at: :desc).limit(5)
     if signals.empty?
       Rails.logger.info("LeadQualifier skip: lead_id=#{lead.id} no_signals")
-      lead.update!(ai_reason: "No signals to score. Add signals first.", ai_last_scored_at: Time.current)
+      unless score_only
+        lead.update!(ai_reason: "No signals to score. Add signals first.", ai_last_scored_at: Time.current)
+      end
       return :no_signals
     end
 
     result = @client.chat_json(
       system: system_prompt,
-      user: user_prompt(lead, signals),
+      user: user_prompt(lead, signals, score_only: score_only),
       schema: response_schema
     )
     unless result.is_a?(Hash)
       Rails.logger.info("LeadQualifier skip: lead_id=#{lead.id} no_result")
-      lead.update!(ai_reason: "AI model did not return a result. Check that Ollama is running.", ai_last_scored_at: Time.current)
+      unless score_only
+        lead.update!(ai_reason: "AI model did not return a result. Check that Ollama is running.", ai_last_scored_at: Time.current)
+      end
       return :no_result
     end
 
-    category = normalize_category(result["category"])
-    fit_score = result["fit_score"].to_i
-    confidence = result["confidence"].to_f
-    confidence /= 100.0 if confidence > 1.0
-    confidence = confidence.clamp(0.0, 1.0)
+    model_category = normalize_category(result["category"])
+    fit_score = normalize_fit_score(result["fit_score"])
+    confidence = normalize_confidence(result["confidence"])
     reason = result["reason"].to_s
 
-    category = override_category(category, reason)
+    category =
+      if score_only && lead.ai_category.present?
+        normalize_category(lead.ai_category)
+      else
+        override_category(model_category, reason)
+      end
     fit_score = enforce_score_cap(category, fit_score)
 
     updates = {
-      ai_category: category,
       ai_fit_score: fit_score,
-      ai_confidence: confidence,
-      ai_reason: reason,
       ai_last_scored_at: Time.current
     }
 
-    updates[:score] = fit_score if lead.score.blank?
+    if score_only
+      updates[:score] = fit_score
+    else
+      updates[:ai_category] = category
+      updates[:ai_confidence] = confidence
+      updates[:ai_reason] = reason
+      updates[:score] = fit_score if lead.score.blank?
 
-    if lead.status.blank? || lead.status == "new"
-      updates[:status] = fit_score < 40 ? "needs_review" : "new"
+      if lead.status.blank? || lead.status == "new"
+        updates[:status] = fit_score < 40 ? "needs_review" : "new"
+      end
     end
 
     lead.update!(updates)
@@ -101,18 +103,22 @@ class LeadQualifier
 
       Categories:
       - ai_filmmaker: makes AI films or AI video projects (CUSTOMER)
+      - traditional_filmmaker: filmmaker/director/producer not clearly AI-native yet, but could adopt (CUSTOMER)
       - studio_or_agency: studio/agency producing AI video or film (CUSTOMER)
       - educator_or_tutorial: teaching AI video workflows (POTENTIAL CUSTOMER)
+      - operations_or_advisor: operator, executive helper, or advisor contact (NETWORK CONTACT, usually not direct customer)
       - news_or_aggregator: news or reposting, not creating films (NOT CUSTOMER)
       - tool_company: vendor of AI tools/platforms (COMPETITOR — always score 0-19)
       - community_org: community organizer, festival, or collab host (NOT CUSTOMER)
+      - marketing_or_ad_partner: marketing/ad/media distribution contact (PARTNER, not a customer)
+      - investor: investor/VC/angel lead (CAPITAL CONTACT, not a customer)
       - other / unknown: insufficient or unrelated
 
       If evidence is thin, keep confidence low and avoid high scores.
     PROMPT
   end
 
-  def user_prompt(lead, signals)
+  def user_prompt(lead, signals, score_only: false)
     signal_text = signals.map.with_index(1) do |signal, idx|
       <<~SIGNAL.strip
         #{idx}. #{signal.author_name} (#{signal.author_handle}) on #{signal.source}:
@@ -128,6 +134,7 @@ class LeadQualifier
       - Source: #{lead.source}
       - Role: #{lead.role}
       - Notes: #{lead.notes}
+      - Current category: #{lead.ai_category.presence || "uncategorized"}
 
       Signals:
       #{signal_text}
@@ -136,7 +143,18 @@ class LeadQualifier
       First write a short reason analyzing whether this lead CREATES AI films or SELLS AI tools.
       Then pick a category. Then assign fit_score and confidence consistent with that category.
       Use these categories: #{CATEGORIES.join(", ")}.
+      #{score_only_category_instruction(lead, score_only)}
     PROMPT
+  end
+
+  def score_only_category_instruction(lead, score_only)
+    return "" unless score_only
+    return "" if lead.ai_category.blank?
+
+    <<~INSTRUCTION.strip
+      IMPORTANT: This is a score-only refresh. The user already set category to "#{lead.ai_category}".
+      Treat that category as source of truth and calibrate fit_score to that category.
+    INSTRUCTION
   end
 
   def response_schema
@@ -157,6 +175,9 @@ class LeadQualifier
     "tool_company" => 19,
     "news_or_aggregator" => 35,
     "community_org" => 35,
+    "operations_or_advisor" => 39,
+    "investor" => 35,
+    "marketing_or_ad_partner" => 39,
     "other" => 39,
     "unknown" => 39
   }.freeze
@@ -207,5 +228,22 @@ class LeadQualifier
     return normalized if CATEGORIES.include?(normalized)
 
     "unknown"
+  end
+
+  def normalize_fit_score(value)
+    score = Integer(value)
+    score.clamp(0, 100)
+  rescue ArgumentError, TypeError
+    value.to_i.clamp(0, 100)
+  end
+
+  def normalize_confidence(value)
+    confidence = Float(value)
+    confidence /= 100.0 if confidence > 1.0
+    return 0.0 unless confidence.finite?
+
+    confidence.clamp(0.0, 1.0)
+  rescue ArgumentError, TypeError
+    0.0
   end
 end

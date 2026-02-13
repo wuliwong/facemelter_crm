@@ -17,8 +17,13 @@ Rails.application.routes.draw do
     resources :users, only: [:index, :update, :destroy]
     resources :leads do
       post :requalify, on: :member
+      resources :communications, controller: "lead_communications", only: [:index, :create, :update, :destroy]
     end
     post "x/search", to: "x_search#create"
+    post "linkedin/search", to: "linkedin_search#create"
+    get "connections", to: "connections#index"
+    post "connections/:provider/launch", to: "connections#launch"
+    delete "connections/:provider", to: "connections#disconnect"
   end
 
   # Reveal health status on /up that returns 200 if the app boots with no exceptions, otherwise 500.

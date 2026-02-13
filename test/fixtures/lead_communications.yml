@@ -1,0 +1,21 @@
+# Read about fixtures at https://api.rubyonrails.org/classes/ActiveRecord/FixtureSet.html
+
+one:
+  lead: one
+  channel: email
+  outcome: sent
+  occurred_at: 2026-02-12 11:44:16
+  responded_at:
+  link: https://example.com/message/1
+  summary: Intro email sent
+  notes: Waiting for response
+
+two:
+  lead: two
+  channel: linkedin_dm
+  outcome: in_conversation
+  occurred_at: 2026-02-12 12:30:00
+  responded_at: 2026-02-12 13:10:00
+  link: https://www.linkedin.com/messaging/thread/abc
+  summary: Followed up on product fit
+  notes: Asked for demo video

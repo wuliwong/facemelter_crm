@@ -10,9 +10,24 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.0].define(version: 2026_02_09_181500) do
+ActiveRecord::Schema[8.0].define(version: 2026_02_12_164416) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
+
+  create_table "lead_communications", force: :cascade do |t|
+    t.bigint "lead_id", null: false
+    t.string "channel", null: false
+    t.string "outcome", default: "sent", null: false
+    t.datetime "occurred_at", null: false
+    t.datetime "responded_at"
+    t.string "link"
+    t.string "summary"
+    t.text "notes"
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["lead_id", "occurred_at"], name: "index_lead_communications_on_lead_id_and_occurred_at"
+    t.index ["lead_id"], name: "index_lead_communications_on_lead_id"
+  end
 
   create_table "leads", force: :cascade do |t|
     t.bigint "organization_id", null: false
@@ -77,6 +92,7 @@ ActiveRecord::Schema[8.0].define(version: 2026_02_09_181500) do
     t.index ["reset_password_token"], name: "index_users_on_reset_password_token", unique: true
   end
 
+  add_foreign_key "lead_communications", "leads"
   add_foreign_key "leads", "organizations"
   add_foreign_key "signals", "leads"
   add_foreign_key "signals", "organizations"

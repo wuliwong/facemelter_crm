@@ -5,11 +5,71 @@ const STATUS_OPTIONS = [
   "new",
   "needs_review",
   "contacted",
+  "engaged",
   "interested",
   "onboarding",
   "active",
-  "closed"
+  "closed",
+  "archived"
 ]
+const DEFAULT_STATUS_FILTER = "open"
+const STATUS_FILTER_OPTIONS = [DEFAULT_STATUS_FILTER, "all", ...STATUS_OPTIONS]
+const DEFAULT_CATEGORY_FILTER = "all"
+const COMMUNICATION_CHANNEL_OPTIONS = [
+  "x_dm",
+  "x_comment",
+  "linkedin_dm",
+  "email",
+  "youtube_comment",
+  "instagram_dm",
+  "reddit_dm",
+  "phone_call",
+  "other"
+]
+const COMMUNICATION_OUTCOME_OPTIONS = [
+  "sent",
+  "no_response",
+  "replied",
+  "in_conversation",
+  "meeting_scheduled",
+  "not_interested",
+  "converted"
+]
+
+const statusFilterFromUrl = () => {
+  if (typeof window === "undefined") return DEFAULT_STATUS_FILTER
+  const raw = new URLSearchParams(window.location.search).get("status")
+  if (raw === DEFAULT_STATUS_FILTER || raw === "all" || STATUS_OPTIONS.includes(raw)) return raw
+  return DEFAULT_STATUS_FILTER
+}
+
+const categoryFilterFromUrl = () => {
+  if (typeof window === "undefined") return DEFAULT_CATEGORY_FILTER
+  const raw = new URLSearchParams(window.location.search).get("category")
+  return raw || DEFAULT_CATEGORY_FILTER
+}
+
+const writeStatusFilterToUrl = (status) => {
+  if (typeof window === "undefined") return
+  const url = new URL(window.location.href)
+  if (!status || status === DEFAULT_STATUS_FILTER) {
+    url.searchParams.delete("status")
+  } else {
+    url.searchParams.set("status", status)
+  }
+  window.history.replaceState({}, "", url)
+}
+
+const writeCategoryFilterToUrl = (category) => {
+  if (typeof window === "undefined") return
+  const url = new URL(window.location.href)
+  if (!category || category === DEFAULT_CATEGORY_FILTER) {
+    url.searchParams.delete("category")
+  } else {
+    url.searchParams.set("category", category)
+  }
+  window.history.replaceState({}, "", url)
+}
 
 const EMPTY_FORM = {
   name: "",
@@ -17,6 +77,7 @@ const EMPTY_FORM = {
   handle: "",
   email: "",
   status: "new",
+  ai_category: "",
   score: "",
   source: "",
   role: "",
@@ -30,6 +91,7 @@ const EDITABLE_LEAD_FIELDS = [
   "handle",
   "email",
   "status",
+  "ai_category",
   "score",
   "source",
   "role",
@@ -45,6 +107,10 @@ const buildLeadPayload = (source) => {
 
   if (payload.score === "") {
     delete payload.score
+  }
+
+  if (!payload.ai_category) {
+    payload.ai_category = null
   }
 
   return payload
@@ -63,7 +129,30 @@ const formatTimestamp = (value) => {
   return date.toLocaleString()
 }
 
+const toDateTimeInputValue = (value) => {
+  const date = value ? new Date(value) : new Date()
+  if (Number.isNaN(date.getTime())) return ""
+
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, "0")
+  const day = String(date.getDate()).padStart(2, "0")
+  const hours = String(date.getHours()).padStart(2, "0")
+  const minutes = String(date.getMinutes()).padStart(2, "0")
+  return `${year}-${month}-${day}T${hours}:${minutes}`
+}
+
+const emptyCommunicationForm = (channelOptions = COMMUNICATION_CHANNEL_OPTIONS) => ({
+  channel: channelOptions[0] || "other",
+  outcome: "sent",
+  occurred_at: toDateTimeInputValue(),
+  responded_at: "",
+  link: "",
+  summary: "",
+  notes: ""
+})
+
 const normalizeHandle = (value) => (value || "").toString().trim()
+const HIDDEN_BY_DEFAULT_STATUSES = new Set(["closed", "archived"])
 
 const handleToUrl = (lead) => {
   const handle = normalizeHandle(lead?.handle)
@@ -124,10 +213,25 @@ export default function LeadsView({ searchTerm = "" }) {
   const [xQuery, setXQuery] = useState("")
   const [xLoading, setXLoading] = useState(false)
   const [xMessage, setXMessage] = useState("")
+  const [liQuery, setLiQuery] = useState("")
+  const [liLoading, setLiLoading] = useState(false)
+  const [liMessage, setLiMessage] = useState("")
+  const [statusFilter, setStatusFilter] = useState(statusFilterFromUrl)
+  const [categoryFilter, setCategoryFilter] = useState(categoryFilterFromUrl)
+  const [categoryOptions, setCategoryOptions] = useState([])
+  const [communicationsByLead, setCommunicationsByLead] = useState({})
+  const [communicationOptions, setCommunicationOptions] = useState({
+    channels: COMMUNICATION_CHANNEL_OPTIONS,
+    outcomes: COMMUNICATION_OUTCOME_OPTIONS
+  })
+  const [communicationForm, setCommunicationForm] = useState(() => emptyCommunicationForm())
+  const [communicationSaving, setCommunicationSaving] = useState(false)
+  const [communicationLoading, setCommunicationLoading] = useState(false)
   const [aiRescoring, setAiRescoring] = useState({})
   const [aiMessages, setAiMessages] = useState({})
   const rescoreTimersRef = useRef({})
   const xSearchPollTimerRef = useRef(null)
+  const liSearchPollTimerRef = useRef(null)
   const ollamaModel =
     typeof document !== "undefined"
       ? document.querySelector('meta[name="ollama-model"]')?.content || ""
@@ -135,19 +239,41 @@ export default function LeadsView({ searchTerm = "" }) {
 
   const normalizedSearch = searchTerm.trim().toLowerCase()
   const filteredLeads = useMemo(() => {
-    if (!normalizedSearch) return leads
-    return leads.filter((lead) => (lead.name || "").toLowerCase().includes(normalizedSearch))
-  }, [leads, normalizedSearch])
+    return leads.filter((lead) => {
+      const nameMatch =
+        !normalizedSearch || (lead.name || "").toLowerCase().includes(normalizedSearch)
+      const leadStatus = lead.status || "new"
+      const statusMatch =
+        statusFilter === "all"
+          ? true
+          : statusFilter === DEFAULT_STATUS_FILTER
+            ? !HIDDEN_BY_DEFAULT_STATUSES.has(leadStatus)
+            : leadStatus === statusFilter
+      const leadCategory = (lead.ai_category || "").toString().trim()
+      const categoryMatch =
+        categoryFilter === DEFAULT_CATEGORY_FILTER
+          ? true
+          : categoryFilter === "uncategorized"
+            ? !leadCategory
+            : leadCategory === categoryFilter
+      return nameMatch && statusMatch && categoryMatch
+    })
+  }, [leads, normalizedSearch, statusFilter, categoryFilter])
 
-  const statsSource = normalizedSearch ? filteredLeads : leads
+  const statsSource = filteredLeads
   const totalLeads = statsSource.length
   const whiteGlove = statsSource.filter((lead) => (lead.score || 0) >= 6).length
-  const contacted = statsSource.filter((lead) => lead.status === "contacted").length
+  const contacted = statsSource.filter((lead) =>
+    ["contacted", "engaged"].includes(lead.status)
+  ).length
 
   const selectedLead = useMemo(
     () => leads.find((lead) => lead.id === selectedLeadId),
     [leads, selectedLeadId]
   )
+  const selectedLeadCommunications = selectedLeadId
+    ? communicationsByLead[selectedLeadId] || []
+    : []
 
   useEffect(() => {
     if (!selectedLeadId) return
@@ -156,11 +282,20 @@ export default function LeadsView({ searchTerm = "" }) {
     setEditMode(false)
   }, [filteredLeads, selectedLeadId])
 
+  useEffect(() => {
+    if (!selectedLeadId) return
+    setCommunicationForm(emptyCommunicationForm(communicationOptions.channels))
+    fetchLeadCommunications(selectedLeadId)
+  }, [selectedLeadId])
+
   const fetchLeads = async (options = {}) => {
     const { keepSelection = false } = options
     const data = await apiRequest("/api/leads")
     const nextLeads = data.leads || []
     setLeads(nextLeads)
+    if (Array.isArray(data.ai_category_options)) {
+      setCategoryOptions(data.ai_category_options)
+    }
 
     if (keepSelection && selectedLeadId) {
       const existing = nextLeads.find((lead) => lead.id === selectedLeadId)
@@ -173,6 +308,36 @@ export default function LeadsView({ searchTerm = "" }) {
     setSelectedLeadId(null)
     setEditMode(false)
     return nextLeads
+  }
+
+  const fetchLeadCommunications = async (leadId) => {
+    setCommunicationLoading(true)
+    try {
+      const data = await apiRequest(`/api/leads/${leadId}/communications`)
+      setCommunicationsByLead((prev) => ({
+        ...prev,
+        [leadId]: data.communications || []
+      }))
+
+      const channels = Array.isArray(data.channel_options)
+        ? data.channel_options
+        : COMMUNICATION_CHANNEL_OPTIONS
+      const outcomes = Array.isArray(data.outcome_options)
+        ? data.outcome_options
+        : COMMUNICATION_OUTCOME_OPTIONS
+
+      setCommunicationOptions({ channels, outcomes })
+      setCommunicationForm((prev) => ({
+        ...emptyCommunicationForm(channels),
+        ...prev,
+        channel: prev.channel || channels[0] || "other",
+        outcome: prev.outcome || "sent"
+      }))
+    } catch (err) {
+      setError(err)
+    } finally {
+      setCommunicationLoading(false)
+    }
   }
 
   useEffect(() => {
@@ -200,8 +365,27 @@ export default function LeadsView({ searchTerm = "" }) {
         clearTimeout(xSearchPollTimerRef.current)
         xSearchPollTimerRef.current = null
       }
+      if (liSearchPollTimerRef.current) {
+        clearTimeout(liSearchPollTimerRef.current)
+        liSearchPollTimerRef.current = null
+      }
     }
   }, [])
+
+  useEffect(() => {
+    writeStatusFilterToUrl(statusFilter)
+  }, [statusFilter])
+
+  useEffect(() => {
+    writeCategoryFilterToUrl(categoryFilter)
+  }, [categoryFilter])
+
+  const effectiveCategoryOptions = useMemo(() => {
+    const fromLeads = leads
+      .map((lead) => (lead.ai_category || "").toString().trim())
+      .filter((value) => value.length > 0)
+    return Array.from(new Set([...categoryOptions, ...fromLeads]))
+  }, [categoryOptions, leads])
 
   const hydrateEditForm = (lead) => {
     setEditForm({
@@ -219,6 +403,44 @@ export default function LeadsView({ searchTerm = "" }) {
   const handleEditChange = (event) => {
     const { name, value } = event.target
     setEditForm((prev) => ({ ...prev, [name]: value }))
+  }
+
+  const handleCommunicationChange = (event) => {
+    const { name, value } = event.target
+    setCommunicationForm((prev) => ({ ...prev, [name]: value }))
+  }
+
+  const handleCreateCommunication = async (event, leadId) => {
+    event.preventDefault()
+    if (!leadId) return
+
+    setCommunicationSaving(true)
+    setError(null)
+
+    try {
+      const payload = {
+        ...communicationForm,
+        responded_at: communicationForm.responded_at || null,
+        link: communicationForm.link || null,
+        summary: communicationForm.summary || null,
+        notes: communicationForm.notes || null
+      }
+
+      const data = await apiRequest(`/api/leads/${leadId}/communications`, {
+        method: "POST",
+        body: { communication: payload }
+      })
+
+      setCommunicationsByLead((prev) => ({
+        ...prev,
+        [leadId]: [data.communication, ...(prev[leadId] || [])]
+      }))
+      setCommunicationForm(emptyCommunicationForm(communicationOptions.channels))
+    } catch (err) {
+      setError(err)
+    } finally {
+      setCommunicationSaving(false)
+    }
   }
 
   const startInlineEdit = (lead) => {
@@ -403,6 +625,70 @@ export default function LeadsView({ searchTerm = "" }) {
     }
   }
 
+  const pollLeadsAfterLiSearch = (knownLeadIds, initialSize, attemptsLeft) => {
+    if (attemptsLeft <= 0) {
+      setLiMessage((prev) =>
+        prev.includes("new lead")
+          ? prev
+          : "LinkedIn search queued. Waiting for results. If jobs are still running, they will keep appearing."
+      )
+      liSearchPollTimerRef.current = null
+      return
+    }
+
+    liSearchPollTimerRef.current = setTimeout(async () => {
+      try {
+        const nextLeads = await fetchLeads({ keepSelection: true })
+        nextLeads.forEach((lead) => knownLeadIds.add(lead.id))
+        const totalNew = knownLeadIds.size - initialSize
+
+        if (totalNew > 0) {
+          setLiMessage(
+            `LinkedIn search running. ${totalNew} new lead${totalNew === 1 ? "" : "s"} added.`
+          )
+        } else {
+          setLiMessage("LinkedIn search queued. Waiting for new leads…")
+        }
+      } catch (_err) {
+        // transient fetch errors should not break the polling loop
+      }
+
+      pollLeadsAfterLiSearch(knownLeadIds, initialSize, attemptsLeft - 1)
+    }, 4000)
+  }
+
+  const handleLinkedinSearch = async (event) => {
+    event.preventDefault()
+    const query = liQuery.trim()
+    if (!query) return
+
+    setLiLoading(true)
+    setLiMessage("")
+    setError(null)
+
+    try {
+      await apiRequest("/api/linkedin/search", {
+        method: "POST",
+        body: { query, limit: 25 }
+      })
+      if (liSearchPollTimerRef.current) {
+        clearTimeout(liSearchPollTimerRef.current)
+        liSearchPollTimerRef.current = null
+      }
+
+      const knownLeadIds = new Set(leads.map((lead) => lead.id))
+      const initialSize = knownLeadIds.size
+      setLiMessage("LinkedIn search queued. Watching for incoming leads…")
+      pollLeadsAfterLiSearch(knownLeadIds, initialSize, 30)
+      setLiQuery("")
+    } catch (err) {
+      setError(err)
+      setLiMessage("Could not queue LinkedIn search. Check your query and try again.")
+    } finally {
+      setLiLoading(false)
+    }
+  }
+
   const handleDeleteLead = async (leadId) => {
     if (!confirm("Delete this lead?")) return
 
@@ -489,6 +775,9 @@ export default function LeadsView({ searchTerm = "" }) {
   }
 
   const activeAiMessages = Object.entries(aiMessages).filter(([, msg]) => msg)
+  const errorMessages = Array.isArray(error?.data?.errors) && error.data.errors.length > 0
+    ? error.data.errors
+    : null
 
   return (
     <div className="leads-page">
@@ -554,6 +843,40 @@ export default function LeadsView({ searchTerm = "" }) {
             <p className="muted">Prioritize the next 10 white‑glove candidates.</p>
           </div>
           <div className="panel-actions">
+            <label className="inline-filter">
+              <span className="label">Status</span>
+              <select
+                value={statusFilter}
+                onChange={(event) => setStatusFilter(event.target.value)}
+                aria-label="Filter by status"
+              >
+                {STATUS_FILTER_OPTIONS.map((status) => (
+                  <option key={status} value={status}>
+                    {status === DEFAULT_STATUS_FILTER
+                      ? "Open leads"
+                      : status === "all"
+                        ? "All statuses"
+                        : status.replace("_", " ")}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="inline-filter">
+              <span className="label">Category</span>
+              <select
+                value={categoryFilter}
+                onChange={(event) => setCategoryFilter(event.target.value)}
+                aria-label="Filter by category"
+              >
+                <option value={DEFAULT_CATEGORY_FILTER}>All categories</option>
+                <option value="uncategorized">Uncategorized</option>
+                {effectiveCategoryOptions.map((category) => (
+                  <option key={category} value={category}>
+                    {category.replaceAll("_", " ")}
+                  </option>
+                ))}
+              </select>
+            </label>
             <form className="inline-search" onSubmit={handleXSearch}>
               <input
                 value={xQuery}
@@ -563,6 +886,17 @@ export default function LeadsView({ searchTerm = "" }) {
               />
               <button className="btn btn-sm" type="submit" disabled={xLoading}>
                 {xLoading ? "Queuing…" : "Run X search"}
+              </button>
+            </form>
+            <form className="inline-search" onSubmit={handleLinkedinSearch}>
+              <input
+                value={liQuery}
+                onChange={(event) => setLiQuery(event.target.value)}
+                placeholder="Search LinkedIn (e.g. vfx supervisor)"
+                aria-label="Search LinkedIn"
+              />
+              <button className="btn btn-sm" type="submit" disabled={liLoading}>
+                {liLoading ? "Queuing…" : "Run LinkedIn search"}
               </button>
             </form>
             {ollamaModel && (
@@ -577,6 +911,7 @@ export default function LeadsView({ searchTerm = "" }) {
         </div>
 
         {xMessage && <p className="muted">{xMessage}</p>}
+        {liMessage && <p className="muted">{liMessage}</p>}
 
         {showForm && (
           <div className="lead-create-inline">
@@ -609,6 +944,21 @@ export default function LeadsView({ searchTerm = "" }) {
                   {STATUS_OPTIONS.map((status) => (
                     <option key={status} value={status}>
                       {status.replace("_", " ")}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Category
+                <select
+                  name="ai_category"
+                  value={form.ai_category}
+                  onChange={handleFormChange}
+                >
+                  <option value="">Uncategorized</option>
+                  {effectiveCategoryOptions.map((category) => (
+                    <option key={category} value={category}>
+                      {category.replaceAll("_", " ")}
                     </option>
                   ))}
                 </select>
@@ -647,7 +997,10 @@ export default function LeadsView({ searchTerm = "" }) {
           <p className="muted">No leads yet. Add the first one.</p>
         )}
         {!loading && leads.length > 0 && filteredLeads.length === 0 && (
-          <p className="muted">No leads match "{searchTerm}".</p>
+          <p className="muted">
+            No leads match your current filters
+            {searchTerm ? ` ("${searchTerm}")` : ""}.
+          </p>
         )}
 
         {filteredLeads.length > 0 && (
@@ -658,6 +1011,7 @@ export default function LeadsView({ searchTerm = "" }) {
                   <th>Lead</th>
                   <th>Platform</th>
                   <th>Role</th>
+                  <th>Category</th>
                   <th>Status</th>
                   <th>Score</th>
                   <th>Contact</th>
@@ -689,6 +1043,7 @@ export default function LeadsView({ searchTerm = "" }) {
                         </td>
                         <td>{lead.platform || "—"}</td>
                         <td>{lead.role || "—"}</td>
+                        <td>{lead.ai_category ? lead.ai_category.replaceAll("_", " ") : "—"}</td>
                         <td>
                           <select
                             className="status-select"
@@ -711,7 +1066,7 @@ export default function LeadsView({ searchTerm = "" }) {
                       </tr>
                       {isSelected && (
                         <tr className="lead-detail-row">
-                          <td colSpan={7}>
+                          <td colSpan={8}>
                             <div className="lead-detail-panel">
                               <div className="detail-header">
                                 <div>
@@ -728,6 +1083,13 @@ export default function LeadsView({ searchTerm = "" }) {
                                       onClick={() => setEditMode(true)}
                                     >
                                       Edit details
+                                    </button>
+                                    <button
+                                      className="btn danger"
+                                      type="button"
+                                      onClick={() => handleDeleteLead(selectedLead.id)}
+                                    >
+                                      Delete Lead
                                     </button>
                                     <button
                                       className="btn"
@@ -787,6 +1149,21 @@ export default function LeadsView({ searchTerm = "" }) {
                                       {STATUS_OPTIONS.map((status) => (
                                         <option key={status} value={status}>
                                           {status.replace("_", " ")}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </label>
+                                  <label>
+                                    Category
+                                    <select
+                                      name="ai_category"
+                                      value={editForm.ai_category || ""}
+                                      onChange={handleEditChange}
+                                    >
+                                      <option value="">Uncategorized</option>
+                                      {effectiveCategoryOptions.map((category) => (
+                                        <option key={category} value={category}>
+                                          {category.replaceAll("_", " ")}
                                         </option>
                                       ))}
                                     </select>
@@ -924,13 +1301,164 @@ export default function LeadsView({ searchTerm = "" }) {
                                       <p>{selectedLead.ai_reason}</p>
                                     </div>
                                   )}
-                                  <button
-                                    className="btn ghost"
-                                    type="button"
-                                    onClick={() => handleDeleteLead(selectedLead.id)}
-                                  >
-                                    Delete Lead
-                                  </button>
+                                  <div className="detail-communications">
+                                    <div className="panel-header">
+                                      <div>
+                                        <h3>Contact Log</h3>
+                                        <p className="muted">
+                                          Track where you contacted them and what happened.
+                                        </p>
+                                      </div>
+                                    </div>
+
+                                    <form
+                                      className="form-grid communication-form"
+                                      onSubmit={(event) =>
+                                        handleCreateCommunication(event, selectedLead.id)
+                                      }
+                                    >
+                                      <label>
+                                        Channel
+                                        <select
+                                          name="channel"
+                                          value={communicationForm.channel}
+                                          onChange={handleCommunicationChange}
+                                          required
+                                        >
+                                          {communicationOptions.channels.map((channel) => (
+                                            <option key={channel} value={channel}>
+                                              {channel.replaceAll("_", " ")}
+                                            </option>
+                                          ))}
+                                        </select>
+                                      </label>
+                                      <label>
+                                        Outcome
+                                        <select
+                                          name="outcome"
+                                          value={communicationForm.outcome}
+                                          onChange={handleCommunicationChange}
+                                          required
+                                        >
+                                          {communicationOptions.outcomes.map((outcome) => (
+                                            <option key={outcome} value={outcome}>
+                                              {outcome.replaceAll("_", " ")}
+                                            </option>
+                                          ))}
+                                        </select>
+                                      </label>
+                                      <label>
+                                        Contacted at
+                                        <input
+                                          type="datetime-local"
+                                          name="occurred_at"
+                                          value={communicationForm.occurred_at}
+                                          onChange={handleCommunicationChange}
+                                          required
+                                        />
+                                      </label>
+                                      <label>
+                                        Responded at
+                                        <input
+                                          type="datetime-local"
+                                          name="responded_at"
+                                          value={communicationForm.responded_at}
+                                          onChange={handleCommunicationChange}
+                                        />
+                                      </label>
+                                      <label className="span-2">
+                                        Link
+                                        <input
+                                          name="link"
+                                          value={communicationForm.link}
+                                          onChange={handleCommunicationChange}
+                                          placeholder="https://..."
+                                        />
+                                      </label>
+                                      <label className="span-2">
+                                        Summary
+                                        <input
+                                          name="summary"
+                                          value={communicationForm.summary}
+                                          onChange={handleCommunicationChange}
+                                          maxLength={500}
+                                          placeholder="What you sent or discussed"
+                                        />
+                                      </label>
+                                      <label className="span-2">
+                                        Notes
+                                        <textarea
+                                          name="notes"
+                                          value={communicationForm.notes}
+                                          onChange={handleCommunicationChange}
+                                        />
+                                      </label>
+                                      <div className="span-2 form-actions">
+                                        <button
+                                          className="btn"
+                                          type="submit"
+                                          disabled={communicationSaving}
+                                        >
+                                          {communicationSaving ? "Saving…" : "Add Contact Log"}
+                                        </button>
+                                      </div>
+                                    </form>
+
+                                    {communicationLoading && (
+                                      <p className="muted">Loading contact logs…</p>
+                                    )}
+                                    {!communicationLoading &&
+                                      selectedLeadCommunications.length === 0 && (
+                                        <p className="muted">
+                                          No contact logs yet. Add your first touchpoint.
+                                        </p>
+                                      )}
+                                    {!communicationLoading &&
+                                      selectedLeadCommunications.length > 0 && (
+                                        <div className="communication-list">
+                                          {selectedLeadCommunications.map((communication) => (
+                                            <article
+                                              key={communication.id}
+                                              className="communication-item"
+                                            >
+                                              <div className="communication-item-head">
+                                                <div className="detail-tags">
+                                                  <span className="pill">
+                                                    {communication.channel.replaceAll("_", " ")}
+                                                  </span>
+                                                  <span className="pill">
+                                                    {communication.outcome.replaceAll("_", " ")}
+                                                  </span>
+                                                </div>
+                                                <div className="communication-item-times">
+                                                  <span>
+                                                    Contacted {formatTimestamp(communication.occurred_at)}
+                                                  </span>
+                                                  {communication.responded_at && (
+                                                    <span>
+                                                      Responded {formatTimestamp(communication.responded_at)}
+                                                    </span>
+                                                  )}
+                                                </div>
+                                              </div>
+                                              {communication.summary && <p>{communication.summary}</p>}
+                                              {communication.link && (
+                                                <p>
+                                                  <a
+                                                    href={communication.link}
+                                                    target="_blank"
+                                                    rel="noreferrer"
+                                                  >
+                                                    {communication.link}
+                                                  </a>
+                                                </p>
+                                              )}
+                                              {communication.notes && <p>{communication.notes}</p>}
+                                            </article>
+                                          ))}
+                                        </div>
+                                      )}
+                                  </div>
                                 </div>
                               )}
                             </div>
@@ -948,7 +1476,7 @@ export default function LeadsView({ searchTerm = "" }) {
 
       {error && (
         <div className="panel error">
-          <p>Something went wrong. Check the console and try again.</p>
+          <p>{errorMessages ? errorMessages.join(" ") : "Something went wrong. Check the console and try again."}</p>
         </div>
       )}
     </div>

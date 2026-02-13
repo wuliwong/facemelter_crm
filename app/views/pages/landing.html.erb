@@ -1,28 +1,21 @@
 <div class="landing">
 
-  <!-- Top Navigation -->
-  <header class="landing-header">
-    <div class="landing-header-inner">
-      <a href="/" class="hero-brand">
-        <div class="brand-mark">FM</div>
-        <span>Facemelter CRM</span>
-      </a>
-      <nav class="landing-nav-links">
+  <!-- Hero -->
+  <section class="landing-hero">
+    <div class="hero-nav">
+      <nav class="hero-nav-links">
         <a href="#features">Features</a>
         <a href="#showcase">Showcase</a>
         <a href="#workflow">Workflow</a>
       </nav>
-      <div class="landing-nav-actions">
+      <div class="hero-nav-actions">
         <a href="/users/sign_in">Sign in</a>
         <a class="btn btn-sm" href="/users/sign_up">Get started</a>
       </div>
     </div>
-  </header>
-
-  <!-- Hero -->
-  <section class="landing-hero">
     <div class="hero-inner">
       <div class="hero-content">
+        <%= image_tag "facemelter_logo_darkbg_v3.png", alt: "Facemelter CRM", class: "hero-logo-image" %>
         <p class="hero-label">AI filmmaking leads, organized.</p>
         <h1>Turn AI film signals into a focused lead pipeline.</h1>
         <p class="hero-desc">
@@ -89,6 +82,7 @@
     </div>
     <div class="showcase-copy">
       <p class="hero-label">Lead queue clarity</p>
+      <%= image_tag "facemelter_logo_darkbg.png", alt: "Facemelter CRM logo", class: "showcase-logo-image" %>
       <h2>Unlock the power of <span class="text-accent">Facemelter CRM</span> and revolutionize your outreach.</h2>
       <p>See every lead and signal in one clean view. Built for fast, consistent outreach when you're doing white&#8209;glove onboarding.</p>
       <div class="hero-actions">

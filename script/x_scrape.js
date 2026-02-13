@@ -9,6 +9,13 @@ const userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/5
 const profileDir = process.env.X_PROFILE_DIR || path.resolve("tmp/x_chrome_profile")
 const debug = process.env.X_SCRAPE_DEBUG === "1"
 
+// Clean up stale lock file from previous sessions
+try {
+  fs.unlinkSync(path.join(profileDir, "SingletonLock"))
+} catch {
+  // Lock file may not exist — that's fine
+}
+
 const buildSearchUrl = (q) =>
   `https://x.com/search?q=${encodeURIComponent(q)}&src=typed_query&f=live`
 
