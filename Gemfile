@@ -61,7 +61,7 @@ end
 
 group :test do
   # Rails 8 test runner expects Minitest 5.x API.
-  gem "minitest", "~> 5.25"
+  gem "minitest", "~> 6.0"
 
   # Use system testing [https://guides.rubyonrails.org/testing.html#system-testing]
   gem "capybara"
