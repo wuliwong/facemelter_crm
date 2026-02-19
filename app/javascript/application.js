@@ -1,4 +1,5 @@
 import "@hotwired/turbo-rails"
+import "iconify-icon"
 import React from "react"
 import { createRoot } from "react-dom/client"
 import App from "./components/App"

@@ -8,6 +8,8 @@ export default function OrganizationView() {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
   const [name, setName] = useState("")
+  const [overview, setOverview] = useState("")
+  const [editingOrg, setEditingOrg] = useState(false)
 
   const loadOrganization = () => {
     setLoading(true)
@@ -16,6 +18,7 @@ export default function OrganizationView() {
         setOrganization(data.organization)
         setUsers(data.users || [])
         setName(data.organization?.name || "")
+        setOverview(data.organization?.overview || "")
       })
       .catch(setError)
       .finally(() => setLoading(false))
@@ -32,14 +35,29 @@ export default function OrganizationView() {
     try {
       const data = await apiRequest("/api/organization", {
         method: "PATCH",
-        body: { organization: { name } }
+        body: { organization: { name, overview } }
       })
       setOrganization(data.organization)
+      setName(data.organization?.name || "")
+      setOverview(data.organization?.overview || "")
+      setEditingOrg(false)
     } catch (err) {
       setError(err)
     } finally {
       setSaving(false)
     }
+  }
+
+  const startEditOrganization = () => {
+    setName(organization?.name || "")
+    setOverview(organization?.overview || "")
+    setEditingOrg(true)
+  }
+
+  const cancelEditOrganization = () => {
+    setName(organization?.name || "")
+    setOverview(organization?.overview || "")
+    setEditingOrg(false)
   }
 
   const handleRoleChange = async (userId, role) => {
@@ -70,22 +88,59 @@ export default function OrganizationView() {
       <section className="panel">
         <div className="panel-header">
           <div>
-            <h2>Organization</h2>
-            <p className="muted">Manage your studio identity and member access.</p>
+            <h2>Organization settings</h2>
+            <p className="muted">Edit your organization name and AI context overview.</p>
           </div>
+          {!loading && organization && !editingOrg && (
+            <button className="btn btn-sm" type="button" onClick={startEditOrganization}>
+              Edit organization
+            </button>
+          )}
         </div>
 
         {loading && <p className="muted">Loading organization…</p>}
         {!loading && organization && (
-          <form onSubmit={handleSaveName} className="form-inline">
-            <label>
-              Name
-              <input value={name} onChange={(event) => setName(event.target.value)} />
-            </label>
-            <button className="btn" type="submit" disabled={saving}>
-              {saving ? "Saving…" : "Save"}
-            </button>
-          </form>
+          <>
+            {!editingOrg && (
+              <div className="detail-grid">
+                <div className="detail-notes">
+                  <span className="label">Name</span>
+                  <p>{organization.name || "—"}</p>
+                </div>
+                <div className="detail-notes">
+                  <span className="label">Overview</span>
+                  <p className="org-overview-text">
+                    {organization.overview?.trim() || "No overview added yet."}
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {editingOrg && (
+              <form onSubmit={handleSaveName} className="form-grid">
+                <label>
+                  Name
+                  <input value={name} onChange={(event) => setName(event.target.value)} />
+                </label>
+                <label className="span-2">
+                  Overview
+                  <textarea
+                    value={overview}
+                    onChange={(event) => setOverview(event.target.value)}
+                    placeholder="Describe your business, offer, target customer, and positioning for AI workflows."
+                  />
+                </label>
+                <div className="span-2 form-actions">
+                  <button className="btn" type="submit" disabled={saving}>
+                    {saving ? "Saving…" : "Save"}
+                  </button>
+                  <button className="btn ghost" type="button" onClick={cancelEditOrganization}>
+                    Cancel
+                  </button>
+                </div>
+              </form>
+            )}
+          </>
         )}
       </section>
 

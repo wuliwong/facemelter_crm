@@ -34,7 +34,8 @@ class XSearchIngestJob < ApplicationJob
 
       next if queued_leads.include?(lead.id)
 
-      LeadQualifyJob.perform_later(lead.id)
+      # Force re-qualification so new rubric/category updates are applied immediately.
+      LeadQualifyJob.perform_later(lead.id, force: true)
       queued_leads.add(lead.id)
     end
   end

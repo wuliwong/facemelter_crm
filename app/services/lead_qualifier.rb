@@ -2,8 +2,9 @@ class LeadQualifier
   CATEGORIES = Lead::AI_CATEGORY_VALUES.freeze
 
   RECENCY_WINDOW = 12.hours
+  SIGNAL_LIMIT = 5
 
-  def initialize(client: OllamaClient.new)
+  def initialize(client: AiProviderConfig.build_client)
     @client = client
   end
 
@@ -13,7 +14,7 @@ class LeadQualifier
       return :skipped
     end
 
-    signals = lead.signals.order(captured_at: :desc).limit(5)
+    signals = lead.signals.order(captured_at: :desc).limit(SIGNAL_LIMIT)
     if signals.empty?
       Rails.logger.info("LeadQualifier skip: lead_id=#{lead.id} no_signals")
       unless score_only
@@ -23,14 +24,14 @@ class LeadQualifier
     end
 
     result = @client.chat_json(
-      system: system_prompt,
-      user: user_prompt(lead, signals, score_only: score_only),
+      system: self.class.system_prompt,
+      user: self.class.user_prompt(lead, signals, score_only: score_only),
       schema: response_schema
     )
     unless result.is_a?(Hash)
       Rails.logger.info("LeadQualifier skip: lead_id=#{lead.id} no_result")
       unless score_only
-        lead.update!(ai_reason: "AI model did not return a result. Check that Ollama is running.", ai_last_scored_at: Time.current)
+        lead.update!(ai_reason: "AI model did not return a result. Check your configured AI provider.", ai_last_scored_at: Time.current)
       end
       return :no_result
     end
@@ -59,7 +60,7 @@ class LeadQualifier
       updates[:ai_category] = category
       updates[:ai_confidence] = confidence
       updates[:ai_reason] = reason
-      updates[:score] = fit_score if lead.score.blank?
+      updates[:score] = fit_score
 
       if lead.status.blank? || lead.status == "new"
         updates[:status] = fit_score < 40 ? "needs_review" : "new"
@@ -75,7 +76,7 @@ class LeadQualifier
 
   private
 
-  def system_prompt
+  def self.system_prompt
     <<~PROMPT
       You qualify leads for StableGen, a product that helps AI filmmakers generate scripts and shot lists,
       and improve visual consistency in AI video workflows. Use only the evidence provided.
@@ -90,6 +91,7 @@ class LeadQualifier
       - Tool vendors: any company whose product overlaps with AI video generation or production tooling
       - News/aggregators: accounts that report on AI but do not create films
       - Corporate brands: companies using AI for marketing, not filmmaking
+      - Creators explicitly rejecting AI workflows (for example anti-AI stance, anti-genAI messaging, or "no AI" positioning)
 
       Scoring rubric (fit_score 0-100):
       - 80-100: Individual or small team actively MAKING AI films or video projects. Evidence of actual
@@ -101,10 +103,22 @@ class LeadQualifier
       - 0-19: Competitors, tool vendors, platforms, or corporate brands. If they BUILD or SELL AI video
         tools rather than USE them to make films, they belong here regardless of how relevant they sound.
 
+      Important:
+      - If the evidence shows they criticize or reject AI-assisted filmmaking, they are not ai_filmmaker.
+      - In that case choose a non-AI category and keep fit_score <= 30 unless there is strong contradictory evidence.
+      - Use the full 0-100 scale. Do not default to 85 for every good lead.
+      - For very strong customer evidence, score above 90.
+      - High-end guidance:
+        * 95-100: Multiple clear signals of active AI film production and frequent output.
+        * 90-94: Clear AI filmmaker/studio evidence with concrete projects and tools.
+        * 80-89: Good fit but evidence is thinner, older, or less specific.
+
       Categories:
       - ai_filmmaker: makes AI films or AI video projects (CUSTOMER)
+      - ai_influencer: AI content creator or influencer promoting AI tools/workflows (POTENTIAL CUSTOMER)
+      - ai_studio_or_agency: studio/agency producing AI video or film (CUSTOMER)
       - traditional_filmmaker: filmmaker/director/producer not clearly AI-native yet, but could adopt (CUSTOMER)
-      - studio_or_agency: studio/agency producing AI video or film (CUSTOMER)
+      - traditional_studio_or_agency: traditional studio/agency not yet AI-native (POTENTIAL CUSTOMER)
       - educator_or_tutorial: teaching AI video workflows (POTENTIAL CUSTOMER)
       - operations_or_advisor: operator, executive helper, or advisor contact (NETWORK CONTACT, usually not direct customer)
       - news_or_aggregator: news or reposting, not creating films (NOT CUSTOMER)
@@ -118,15 +132,19 @@ class LeadQualifier
     PROMPT
   end
 
-  def user_prompt(lead, signals, score_only: false)
+  def self.user_prompt(lead, signals, score_only: false)
     signal_text = signals.map.with_index(1) do |signal, idx|
       <<~SIGNAL.strip
         #{idx}. #{signal.author_name} (#{signal.author_handle}) on #{signal.source}:
         #{signal.content.to_s.strip}
       SIGNAL
     end.join("\n\n")
+    overview_text = OrganizationOverviewContext.for(lead.organization)
 
     <<~PROMPT
+      Company Overview:
+      #{overview_text}
+
       Lead:
       - Name: #{lead.name}
       - Handle: #{lead.handle}
@@ -147,7 +165,7 @@ class LeadQualifier
     PROMPT
   end
 
-  def score_only_category_instruction(lead, score_only)
+  def self.score_only_category_instruction(lead, score_only)
     return "" unless score_only
     return "" if lead.ai_category.blank?
 

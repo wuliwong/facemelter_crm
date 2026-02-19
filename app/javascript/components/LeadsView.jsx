@@ -18,7 +18,10 @@ const DEFAULT_CATEGORY_FILTER = "all"
 const COMMUNICATION_CHANNEL_OPTIONS = [
   "x_dm",
   "x_comment",
+  "followed_on_x",
   "linkedin_dm",
+  "linkedin_comment",
+  "connected_on_linkedin",
   "email",
   "youtube_comment",
   "instagram_dm",
@@ -76,6 +79,7 @@ const EMPTY_FORM = {
   platform: "",
   handle: "",
   email: "",
+  website: "",
   status: "new",
   ai_category: "",
   score: "",
@@ -90,6 +94,7 @@ const EDITABLE_LEAD_FIELDS = [
   "platform",
   "handle",
   "email",
+  "website",
   "status",
   "ai_category",
   "score",
@@ -111,6 +116,10 @@ const buildLeadPayload = (source) => {
 
   if (!payload.ai_category) {
     payload.ai_category = null
+  }
+
+  if (!payload.website) {
+    payload.website = null
   }
 
   return payload
@@ -197,6 +206,92 @@ const handleToUrl = (lead) => {
   return null
 }
 
+const dossierFilenameFallback = (lead) => {
+  const normalizedName = (lead?.name || "")
+    .toString()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+  return `lead-dossier-${normalizedName || lead?.id || "download"}.pdf`
+}
+
+const filenameFromContentDisposition = (contentDisposition, fallbackName) => {
+  const value = (contentDisposition || "").toString()
+  if (!value) return fallbackName
+
+  const utfMatch = value.match(/filename\*=UTF-8''([^;]+)/i)
+  if (utfMatch?.[1]) {
+    try {
+      return decodeURIComponent(utfMatch[1])
+    } catch {
+      return utfMatch[1]
+    }
+  }
+
+  const basicMatch = value.match(/filename=\"?([^\";]+)\"?/i)
+  if (basicMatch?.[1]) return basicMatch[1]
+
+  return fallbackName
+}
+
+const removeUrlFromProfileMap = (profilesMap, profileType, targetUrl) => {
+  if (!profilesMap || typeof profilesMap !== "object") return profilesMap
+
+  const nextProfiles = { ...profilesMap }
+
+  if (profileType && Array.isArray(nextProfiles[profileType])) {
+    const filtered = nextProfiles[profileType].filter((url) => url !== targetUrl)
+    if (filtered.length > 0) {
+      nextProfiles[profileType] = filtered
+    } else {
+      delete nextProfiles[profileType]
+    }
+    return nextProfiles
+  }
+
+  Object.entries(nextProfiles).forEach(([key, urls]) => {
+    if (!Array.isArray(urls)) return
+    const filtered = urls.filter((url) => url !== targetUrl)
+    if (filtered.length > 0) {
+      nextProfiles[key] = filtered
+    } else {
+      delete nextProfiles[key]
+    }
+  })
+
+  return nextProfiles
+}
+
+const withSocialProfileRemoved = (lead, profile) => {
+  const nextLead = { ...lead }
+
+  if (Array.isArray(nextLead.social_profiles)) {
+    nextLead.social_profiles = nextLead.social_profiles.filter(
+      (item) => item.id !== profile.id
+    )
+  } else {
+    nextLead.social_profiles = []
+  }
+
+  if (
+    nextLead.deep_dive_data &&
+    typeof nextLead.deep_dive_data === "object" &&
+    nextLead.deep_dive_data.profiles &&
+    typeof nextLead.deep_dive_data.profiles === "object"
+  ) {
+    nextLead.deep_dive_data = {
+      ...nextLead.deep_dive_data,
+      profiles: removeUrlFromProfileMap(
+        nextLead.deep_dive_data.profiles,
+        profile.profile_type,
+        profile.url
+      )
+    }
+  }
+
+  return nextLead
+}
+
 export default function LeadsView({ searchTerm = "" }) {
   const [leads, setLeads] = useState([])
   const [selectedLeadId, setSelectedLeadId] = useState(null)
@@ -229,12 +324,22 @@ export default function LeadsView({ searchTerm = "" }) {
   const [communicationLoading, setCommunicationLoading] = useState(false)
   const [aiRescoring, setAiRescoring] = useState({})
   const [aiMessages, setAiMessages] = useState({})
+  const [deepDiving, setDeepDiving] = useState({})
+  const [deepDiveMessages, setDeepDiveMessages] = useState({})
+  const [firstContactGenerating, setFirstContactGenerating] = useState({})
+  const [firstContactMessages, setFirstContactMessages] = useState({})
+  const [dossierDownloading, setDossierDownloading] = useState({})
+  const [tuningDatasetDownloading, setTuningDatasetDownloading] = useState(false)
+  const [tuningFeedbackSaving, setTuningFeedbackSaving] = useState({})
+  const [profileDeletingById, setProfileDeletingById] = useState({})
   const rescoreTimersRef = useRef({})
+  const deepDiveTimersRef = useRef({})
+  const firstContactTimersRef = useRef({})
   const xSearchPollTimerRef = useRef(null)
   const liSearchPollTimerRef = useRef(null)
-  const ollamaModel =
+  const aiModel =
     typeof document !== "undefined"
-      ? document.querySelector('meta[name="ollama-model"]')?.content || ""
+      ? document.querySelector('meta[name="ai-model"]')?.content || ""
       : ""
 
   const normalizedSearch = searchTerm.trim().toLowerCase()
@@ -271,6 +376,11 @@ export default function LeadsView({ searchTerm = "" }) {
     () => leads.find((lead) => lead.id === selectedLeadId),
     [leads, selectedLeadId]
   )
+  const selectedLeadSearchWarnings = useMemo(() => {
+    if (!selectedLead?.deep_dive_data) return []
+    const warnings = selectedLead.deep_dive_data.search_warnings
+    return Array.isArray(warnings) ? warnings.filter(Boolean) : []
+  }, [selectedLead])
   const selectedLeadCommunications = selectedLeadId
     ? communicationsByLead[selectedLeadId] || []
     : []
@@ -361,6 +471,10 @@ export default function LeadsView({ searchTerm = "" }) {
     return () => {
       Object.values(rescoreTimersRef.current).forEach(clearTimeout)
       rescoreTimersRef.current = {}
+      Object.values(deepDiveTimersRef.current).forEach(clearTimeout)
+      deepDiveTimersRef.current = {}
+      Object.values(firstContactTimersRef.current).forEach(clearTimeout)
+      firstContactTimersRef.current = {}
       if (xSearchPollTimerRef.current) {
         clearTimeout(xSearchPollTimerRef.current)
         xSearchPollTimerRef.current = null
@@ -391,6 +505,7 @@ export default function LeadsView({ searchTerm = "" }) {
     setEditForm({
       ...EMPTY_FORM,
       ...lead,
+      website: lead.website ?? "",
       score: lead.score ?? ""
     })
   }
@@ -703,6 +818,31 @@ export default function LeadsView({ searchTerm = "" }) {
     }
   }
 
+  const handleDeleteSocialProfile = async (leadId, profile) => {
+    if (!profile?.id) return
+    if (!confirm("Delete this link from the lead?")) return
+
+    setProfileDeletingById((prev) => ({ ...prev, [profile.id]: true }))
+    setError(null)
+
+    try {
+      await apiRequest(`/api/leads/${leadId}/social_profiles/${profile.id}`, {
+        method: "DELETE"
+      })
+      setLeads((prev) =>
+        prev.map((lead) => (lead.id === leadId ? withSocialProfileRemoved(lead, profile) : lead))
+      )
+    } catch (err) {
+      setError(err)
+    } finally {
+      setProfileDeletingById((prev) => {
+        const next = { ...prev }
+        delete next[profile.id]
+        return next
+      })
+    }
+  }
+
   const refreshLead = async (leadId, previousScoreAt) => {
     const data = await apiRequest(`/api/leads/${leadId}`)
     const updated = data.lead
@@ -713,6 +853,47 @@ export default function LeadsView({ searchTerm = "" }) {
         ? "AI score updated."
         : updated.ai_reason || "AI scoring finished."
       setAiMessages((prev) => ({ ...prev, [leadId]: msg }))
+      return true
+    }
+
+    return false
+  }
+
+  const refreshLeadAfterDeepDive = async (leadId, previousRunAt) => {
+    const data = await apiRequest(`/api/leads/${leadId}`)
+    const updated = data.lead
+    setLeads((prev) => prev.map((lead) => (lead.id === leadId ? { ...lead, ...updated } : lead)))
+
+    const status = updated.deep_dive_status || "idle"
+    const finished = status === "complete" || status === "failed"
+    const runChanged =
+      updated.deep_dive_last_run_at && updated.deep_dive_last_run_at !== previousRunAt
+
+    if (finished && runChanged) {
+      const hasSearchWarnings =
+        Array.isArray(updated.deep_dive_data?.search_warnings) &&
+        updated.deep_dive_data.search_warnings.length > 0
+      const message =
+        status === "complete"
+          ? hasSearchWarnings
+            ? "Deep dive completed with SERPER/Google warning. Review warning banner."
+            : "Deep dive completed."
+          : updated.deep_dive_error || "Deep dive failed. Check logs and try again."
+      setDeepDiveMessages((prev) => ({ ...prev, [leadId]: message }))
+      return true
+    }
+
+    if (finished && !previousRunAt && updated.deep_dive_last_run_at) {
+      const hasSearchWarnings =
+        Array.isArray(updated.deep_dive_data?.search_warnings) &&
+        updated.deep_dive_data.search_warnings.length > 0
+      const message =
+        status === "complete"
+          ? hasSearchWarnings
+            ? "Deep dive completed with SERPER/Google warning. Review warning banner."
+            : "Deep dive completed."
+          : updated.deep_dive_error || "Deep dive failed. Check logs and try again."
+      setDeepDiveMessages((prev) => ({ ...prev, [leadId]: message }))
       return true
     }
 
@@ -774,36 +955,343 @@ export default function LeadsView({ searchTerm = "" }) {
     }
   }
 
+  const pollLeadForDeepDive = (leadId, previousRunAt, attemptsLeft, intervalMs = 5000) => {
+    if (attemptsLeft <= 0) {
+      setDeepDiveMessages((prev) => ({
+        ...prev,
+        [leadId]: "Deep dive is taking longer than usual. Still checking for results…"
+      }))
+      pollLeadForDeepDive(leadId, previousRunAt, 24, 15000)
+      return
+    }
+
+    deepDiveTimersRef.current[leadId] = setTimeout(async () => {
+      try {
+        const done = await refreshLeadAfterDeepDive(leadId, previousRunAt)
+        if (done) {
+          setDeepDiving((prev) => ({ ...prev, [leadId]: false }))
+          delete deepDiveTimersRef.current[leadId]
+          return
+        }
+      } catch (_err) {
+        // Keep polling through transient errors.
+      }
+
+      pollLeadForDeepDive(leadId, previousRunAt, attemptsLeft - 1, intervalMs)
+    }, intervalMs)
+  }
+
+  const handleDeepDive = async (leadId) => {
+    if (deepDiving[leadId]) return
+
+    setDeepDiving((prev) => ({ ...prev, [leadId]: true }))
+    setDeepDiveMessages((prev) => ({ ...prev, [leadId]: "" }))
+    setError(null)
+
+    try {
+      if (deepDiveTimersRef.current[leadId]) {
+        clearTimeout(deepDiveTimersRef.current[leadId])
+        delete deepDiveTimersRef.current[leadId]
+      }
+
+      await apiRequest(`/api/leads/${leadId}/deep_dive`, { method: "POST" })
+      setDeepDiveMessages((prev) => ({
+        ...prev,
+        [leadId]: "Deep dive queued. Watching for results…"
+      }))
+
+      const previousRunAt =
+        leads.find((lead) => lead.id === leadId)?.deep_dive_last_run_at || null
+      pollLeadForDeepDive(leadId, previousRunAt, 60)
+    } catch (err) {
+      setError(err)
+      setDeepDiveMessages((prev) => ({
+        ...prev,
+        [leadId]: "Could not queue deep dive. Check logs and try again."
+      }))
+      setDeepDiving((prev) => ({ ...prev, [leadId]: false }))
+    }
+  }
+
+  const refreshLeadAfterFirstContact = async (leadId, previousRunAt) => {
+    const data = await apiRequest(`/api/leads/${leadId}`)
+    const updated = data.lead
+    setLeads((prev) => prev.map((lead) => (lead.id === leadId ? { ...lead, ...updated } : lead)))
+
+    const status = updated.first_contact_status || "idle"
+    const finished = status === "complete" || status === "failed"
+    const runChanged =
+      updated.first_contact_last_run_at && updated.first_contact_last_run_at !== previousRunAt
+
+    if (finished && runChanged) {
+      const message =
+        status === "complete"
+          ? "First contact suggestion ready."
+          : updated.first_contact_error || "Suggestion failed. Check logs and try again."
+      setFirstContactMessages((prev) => ({ ...prev, [leadId]: message }))
+      return true
+    }
+
+    return false
+  }
+
+  const pollLeadForFirstContact = (leadId, previousRunAt, attemptsLeft) => {
+    if (attemptsLeft <= 0) {
+      setFirstContactMessages((prev) => ({
+        ...prev,
+        [leadId]: "Timed out waiting for first contact suggestion."
+      }))
+      setFirstContactGenerating((prev) => ({ ...prev, [leadId]: false }))
+      delete firstContactTimersRef.current[leadId]
+      return
+    }
+
+    firstContactTimersRef.current[leadId] = setTimeout(async () => {
+      try {
+        const done = await refreshLeadAfterFirstContact(leadId, previousRunAt)
+        if (done) {
+          setFirstContactGenerating((prev) => ({ ...prev, [leadId]: false }))
+          delete firstContactTimersRef.current[leadId]
+          return
+        }
+      } catch (_err) {
+        // Keep polling through transient errors.
+      }
+
+      pollLeadForFirstContact(leadId, previousRunAt, attemptsLeft - 1)
+    }, 5000)
+  }
+
+  const handleSuggestFirstContact = async (leadId) => {
+    if (firstContactGenerating[leadId]) return
+
+    setFirstContactGenerating((prev) => ({ ...prev, [leadId]: true }))
+    setFirstContactMessages((prev) => ({ ...prev, [leadId]: "" }))
+    setError(null)
+
+    try {
+      if (firstContactTimersRef.current[leadId]) {
+        clearTimeout(firstContactTimersRef.current[leadId])
+        delete firstContactTimersRef.current[leadId]
+      }
+
+      await apiRequest(`/api/leads/${leadId}/suggest_first_contact`, { method: "POST" })
+      setFirstContactMessages((prev) => ({
+        ...prev,
+        [leadId]: "Generating first contact suggestion…"
+      }))
+
+      const previousRunAt =
+        leads.find((lead) => lead.id === leadId)?.first_contact_last_run_at || null
+      pollLeadForFirstContact(leadId, previousRunAt, 36)
+    } catch (err) {
+      setError(err)
+      setFirstContactMessages((prev) => ({
+        ...prev,
+        [leadId]: "Could not queue first contact suggestion."
+      }))
+      setFirstContactGenerating((prev) => ({ ...prev, [leadId]: false }))
+    }
+  }
+
+  const handleDownloadDossier = async (lead) => {
+    if (!lead?.id) return
+    if (dossierDownloading[lead.id]) return
+
+    setDossierDownloading((prev) => ({ ...prev, [lead.id]: true }))
+    setError(null)
+
+    try {
+      const response = await fetch(`/api/leads/${lead.id}/dossier`, {
+        method: "GET",
+        credentials: "same-origin",
+        headers: {
+          Accept: "application/pdf"
+        }
+      })
+
+      if (!response.ok) {
+        const contentType = response.headers.get("content-type") || ""
+        const data = contentType.includes("application/json")
+          ? await response.json().catch(() => null)
+          : null
+        const requestError = new Error("Request failed")
+        requestError.status = response.status
+        requestError.data = data
+        throw requestError
+      }
+
+      const blob = await response.blob()
+      const fallbackName = dossierFilenameFallback(lead)
+      const filename = filenameFromContentDisposition(
+        response.headers.get("content-disposition"),
+        fallbackName
+      )
+
+      const downloadUrl = window.URL.createObjectURL(blob)
+      const link = document.createElement("a")
+      link.href = downloadUrl
+      link.download = filename
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      window.URL.revokeObjectURL(downloadUrl)
+    } catch (err) {
+      setError(err)
+    } finally {
+      setDossierDownloading((prev) => {
+        const next = { ...prev }
+        delete next[lead.id]
+        return next
+      })
+    }
+  }
+
+  const handleLeadTuningFeedback = async (leadId, rating) => {
+    if (!leadId || !["up", "down"].includes(rating)) return
+    if (tuningFeedbackSaving[leadId]) return
+
+    setTuningFeedbackSaving((prev) => ({ ...prev, [leadId]: true }))
+    setError(null)
+
+    try {
+      const data = await apiRequest(`/api/leads/${leadId}/tuning_feedback`, {
+        method: "POST",
+        body: { feedback: { rating } }
+      })
+
+      if (data?.lead) {
+        setLeads((prev) => prev.map((lead) => (lead.id === data.lead.id ? data.lead : lead)))
+        if (selectedLeadId === data.lead.id) {
+          hydrateEditForm(data.lead)
+        }
+      }
+    } catch (err) {
+      setError(err)
+    } finally {
+      setTuningFeedbackSaving((prev) => {
+        const next = { ...prev }
+        delete next[leadId]
+        return next
+      })
+    }
+  }
+
+  const handleDownloadTuningDataset = async () => {
+    if (tuningDatasetDownloading) return
+
+    setTuningDatasetDownloading(true)
+    setError(null)
+
+    try {
+      const response = await fetch("/api/leads/tuning_dataset", {
+        method: "GET",
+        credentials: "same-origin",
+        headers: {
+          Accept: "application/x-ndjson,application/json"
+        }
+      })
+
+      if (!response.ok) {
+        const contentType = response.headers.get("content-type") || ""
+        const data = contentType.includes("application/json")
+          ? await response.json().catch(() => null)
+          : null
+        const requestError = new Error("Request failed")
+        requestError.status = response.status
+        requestError.data = data
+        throw requestError
+      }
+
+      const blob = await response.blob()
+      const filename = filenameFromContentDisposition(
+        response.headers.get("content-disposition"),
+        `lead-tuning-dataset-${new Date().toISOString().slice(0, 10).replaceAll("-", "")}.jsonl`
+      )
+      const downloadUrl = window.URL.createObjectURL(blob)
+      const link = document.createElement("a")
+      link.href = downloadUrl
+      link.download = filename
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      window.URL.revokeObjectURL(downloadUrl)
+    } catch (err) {
+      setError(err)
+    } finally {
+      setTuningDatasetDownloading(false)
+    }
+  }
+
   const activeAiMessages = Object.entries(aiMessages).filter(([, msg]) => msg)
+  const activeDeepDiveMessages = Object.entries(deepDiveMessages).filter(([, msg]) => msg)
+  const activeFirstContactMessages = Object.entries(firstContactMessages).filter(([, msg]) => msg)
+  const activeNotifications = [
+    ...activeAiMessages.map(([leadId, message]) => ({
+      key: `ai-${leadId}`,
+      leadId,
+      message,
+      kind: "ai"
+    })),
+    ...activeDeepDiveMessages.map(([leadId, message]) => ({
+      key: `deep-dive-${leadId}`,
+      leadId,
+      message,
+      kind: "deep_dive"
+    })),
+    ...activeFirstContactMessages.map(([leadId, message]) => ({
+      key: `first-contact-${leadId}`,
+      leadId,
+      message,
+      kind: "first_contact"
+    }))
+  ]
   const errorMessages = Array.isArray(error?.data?.errors) && error.data.errors.length > 0
     ? error.data.errors
     : null
 
   return (
     <div className="leads-page">
-      {activeAiMessages.length > 0 && (
+      {activeNotifications.length > 0 && (
         <div className="flash-stack" role="status" aria-live="polite">
-          {activeAiMessages.map(([leadId, message]) => {
+          {activeNotifications.map(({ key, leadId, message, kind }) => {
             const lead = leads.find((l) => l.id === Number(leadId))
             const name = lead?.name || "Lead"
-            const scoring = aiRescoring[leadId]
-            const type = message === "AI score updated."
-              ? "success"
-              : scoring
-              ? "info"
-              : "alert"
+            const inProgress =
+              kind === "ai"
+                ? aiRescoring[leadId]
+                : kind === "deep_dive"
+                  ? deepDiving[leadId]
+                  : firstContactGenerating[leadId]
+            const successMessage = kind === "ai"
+              ? "AI score updated."
+              : kind === "deep_dive"
+                ? "Deep dive completed."
+                : "First contact suggestion ready."
+            const isWarning = kind === "deep_dive" && message.toLowerCase().includes("warning")
+            const type = isWarning
+              ? "critical"
+              : message === successMessage
+                ? "success"
+                : inProgress
+                  ? "info"
+                  : "alert"
             return (
-              <div key={leadId} className={`flash ${type}`}>
+              <div key={key} className={`flash ${type}`}>
                 <span>
                   <strong>{name}:</strong> {message}
                 </span>
-                {!scoring && (
+                {!inProgress && (
                   <button
                     className="flash-dismiss"
                     type="button"
                     aria-label="Dismiss"
                     onClick={() =>
-                      setAiMessages((prev) => {
+                      (kind === "ai"
+                        ? setAiMessages
+                        : kind === "deep_dive"
+                          ? setDeepDiveMessages
+                          : setFirstContactMessages)((prev) => {
                         const next = { ...prev }
                         delete next[leadId]
                         return next
@@ -839,8 +1327,8 @@ export default function LeadsView({ searchTerm = "" }) {
       <section className="panel">
         <div className="panel-header">
           <div>
-            <h2>Lead Queue</h2>
-            <p className="muted">Prioritize the next 10 white‑glove candidates.</p>
+            <h2>Prospect list</h2>
+            <p className="muted">Filter, search, and prioritize active leads.</p>
           </div>
           <div className="panel-actions">
             <label className="inline-filter">
@@ -899,11 +1387,19 @@ export default function LeadsView({ searchTerm = "" }) {
                 {liLoading ? "Queuing…" : "Run LinkedIn search"}
               </button>
             </form>
-            {ollamaModel && (
-              <span className="pill ai-model" title="Local qualification model">
-                Model: {ollamaModel}
+            {aiModel && (
+              <span className="pill ai-model" title="Active AI model">
+                Model: {aiModel}
               </span>
             )}
+            <button
+              className="btn ghost"
+              type="button"
+              onClick={handleDownloadTuningDataset}
+              disabled={tuningDatasetDownloading}
+            >
+              {tuningDatasetDownloading ? "Preparing dataset…" : "Download Tuning Dataset"}
+            </button>
             <button className="btn" onClick={() => setShowForm((prev) => !prev)}>
               {showForm ? "Close" : "New Lead"}
             </button>
@@ -937,6 +1433,10 @@ export default function LeadsView({ searchTerm = "" }) {
               <label>
                 Email
                 <input name="email" value={form.email} onChange={handleFormChange} />
+              </label>
+              <label>
+                Website
+                <input name="website" value={form.website} onChange={handleFormChange} />
               </label>
               <label>
                 Status
@@ -1092,6 +1592,60 @@ export default function LeadsView({ searchTerm = "" }) {
                                       Delete Lead
                                     </button>
                                     <button
+                                      className="btn ghost"
+                                      type="button"
+                                      onClick={() => handleDownloadDossier(selectedLead)}
+                                      disabled={Boolean(dossierDownloading[selectedLead.id])}
+                                    >
+                                      {dossierDownloading[selectedLead.id]
+                                        ? "Preparing PDF…"
+                                        : "Download Lead"}
+                                    </button>
+                                    <button
+                                      className={
+                                        selectedLead.tuning_feedback_rating === "up" ? "btn" : "btn ghost"
+                                      }
+                                      type="button"
+                                      onClick={() =>
+                                        handleLeadTuningFeedback(selectedLead.id, "up")
+                                      }
+                                      disabled={Boolean(tuningFeedbackSaving[selectedLead.id])}
+                                      title="Mark as a correct/high-fit example for tuning dataset"
+                                      aria-label="Thumb up lead"
+                                    >
+                                      <iconify-icon
+                                        icon={
+                                          selectedLead.tuning_feedback_rating === "up"
+                                            ? "mdi:thumb-up"
+                                            : "mdi:thumb-up-outline"
+                                        }
+                                        width="18"
+                                        height="18"
+                                      />
+                                    </button>
+                                    <button
+                                      className={
+                                        selectedLead.tuning_feedback_rating === "down" ? "btn danger" : "btn ghost"
+                                      }
+                                      type="button"
+                                      onClick={() =>
+                                        handleLeadTuningFeedback(selectedLead.id, "down")
+                                      }
+                                      disabled={Boolean(tuningFeedbackSaving[selectedLead.id])}
+                                      title="Mark as a correction/low-fit example for tuning dataset"
+                                      aria-label="Thumb down lead"
+                                    >
+                                      <iconify-icon
+                                        icon={
+                                          selectedLead.tuning_feedback_rating === "down"
+                                            ? "mdi:thumb-down"
+                                            : "mdi:thumb-down-outline"
+                                        }
+                                        width="18"
+                                        height="18"
+                                      />
+                                    </button>
+                                    <button
                                       className="btn"
                                       type="button"
                                       onClick={() => handleAiRescore(selectedLead.id)}
@@ -1100,6 +1654,34 @@ export default function LeadsView({ searchTerm = "" }) {
                                       {aiRescoring[selectedLead.id]
                                         ? "Re-scoring…"
                                         : "Re-score AI"}
+                                    </button>
+                                    <button
+                                      className="btn"
+                                      type="button"
+                                      onClick={() => handleDeepDive(selectedLead.id)}
+                                      disabled={deepDiving[selectedLead.id]}
+                                    >
+                                      {deepDiving[selectedLead.id]
+                                        ? "Deep diving…"
+                                        : "Deep Dive"}
+                                    </button>
+                                    <button
+                                      className="btn"
+                                      type="button"
+                                      onClick={() => handleSuggestFirstContact(selectedLead.id)}
+                                      disabled={
+                                        firstContactGenerating[selectedLead.id] ||
+                                        selectedLead.deep_dive_status !== "complete"
+                                      }
+                                      title={
+                                        selectedLead.deep_dive_status !== "complete"
+                                          ? "Run Deep Dive first"
+                                          : ""
+                                      }
+                                    >
+                                      {firstContactGenerating[selectedLead.id]
+                                        ? "Suggesting…"
+                                        : "Suggest First Contact"}
                                     </button>
                                   </div>
                                 )}
@@ -1136,6 +1718,14 @@ export default function LeadsView({ searchTerm = "" }) {
                                     <input
                                       name="email"
                                       value={editForm.email}
+                                      onChange={handleEditChange}
+                                    />
+                                  </label>
+                                  <label>
+                                    Website
+                                    <input
+                                      name="website"
+                                      value={editForm.website}
                                       onChange={handleEditChange}
                                     />
                                   </label>
@@ -1265,12 +1855,30 @@ export default function LeadsView({ searchTerm = "" }) {
                                       {selectedLead.email || "—"}
                                     </p>
                                     <p>
+                                      <span className="label">Website</span>
+                                      {selectedLead.website ? (
+                                        <a href={selectedLead.website} target="_blank" rel="noreferrer">
+                                          {selectedLead.website}
+                                        </a>
+                                      ) : (
+                                        "—"
+                                      )}
+                                    </p>
+                                    <p>
                                       <span className="label">Score</span>
                                       {selectedLead.score ?? "—"}
                                     </p>
                                     <p>
                                       <span className="label">Status</span>
                                       {selectedLead.status || "new"}
+                                    </p>
+                                    <p>
+                                      <span className="label">Tuning Feedback</span>
+                                      {selectedLead.tuning_feedback_rating === "up"
+                                        ? "Thumb up, included in dataset"
+                                        : selectedLead.tuning_feedback_rating === "down"
+                                          ? "Thumb down, included in dataset"
+                                          : "Not reviewed"}
                                     </p>
                                   </div>
                                   <div className="detail-meta">
@@ -1291,6 +1899,26 @@ export default function LeadsView({ searchTerm = "" }) {
                                       {formatTimestamp(selectedLead.ai_last_scored_at)}
                                     </p>
                                   </div>
+                                  <div className="detail-meta">
+                                    <p>
+                                      <span className="label">Deep Dive Status</span>
+                                      {selectedLead.deep_dive_status || "idle"}
+                                    </p>
+                                    <p>
+                                      <span className="label">Deep Dive Last Run</span>
+                                      {formatTimestamp(selectedLead.deep_dive_last_run_at)}
+                                    </p>
+                                  </div>
+                                  <div className="detail-meta">
+                                    <p>
+                                      <span className="label">First Contact Status</span>
+                                      {selectedLead.first_contact_status || "idle"}
+                                    </p>
+                                    <p>
+                                      <span className="label">First Contact Last Run</span>
+                                      {formatTimestamp(selectedLead.first_contact_last_run_at)}
+                                    </p>
+                                  </div>
                                   <div className="detail-notes">
                                     <span className="label">Notes</span>
                                     <p>{selectedLead.notes || "No notes yet."}</p>
@@ -1301,6 +1929,181 @@ export default function LeadsView({ searchTerm = "" }) {
                                       <p>{selectedLead.ai_reason}</p>
                                     </div>
                                   )}
+                                  {selectedLeadSearchWarnings.length > 0 && (
+                                    <div className="search-warning-banner" role="alert">
+                                      <strong>SERPER/GOOGLE SEARCH WARNING</strong>
+                                      <p>
+                                        Lead enrichment search failed and likely used fallback data.
+                                        Check Serper credits/API key before trusting discovered links.
+                                      </p>
+                                      <ul>
+                                        {selectedLeadSearchWarnings.map((warning) => (
+                                          <li key={warning}>{warning}</li>
+                                        ))}
+                                      </ul>
+                                    </div>
+                                  )}
+                                  <div className="detail-notes">
+                                    <span className="label">Deep Dive Summary</span>
+                                    <p>
+                                      {selectedLead.deep_dive_data?.summary ||
+                                        "Run deep dive to enrich profiles and context."}
+                                    </p>
+                                    {selectedLead.deep_dive_data?.outreach_angle && (
+                                      <p>
+                                        <strong>Outreach angle:</strong>{" "}
+                                        {selectedLead.deep_dive_data.outreach_angle}
+                                      </p>
+                                    )}
+                                    {selectedLead.deep_dive_data?.next_step && (
+                                      <p>
+                                        <strong>Suggested next step:</strong>{" "}
+                                        {selectedLead.deep_dive_data.next_step}
+                                      </p>
+                                    )}
+                                    {selectedLead.deep_dive_error && (
+                                      <p className="muted">
+                                        <strong>Last error:</strong> {selectedLead.deep_dive_error}
+                                      </p>
+                                    )}
+                                    {Array.isArray(selectedLead.deep_dive_data?.highlights) &&
+                                      selectedLead.deep_dive_data.highlights.length > 0 && (
+                                        <div className="detail-tags">
+                                          {selectedLead.deep_dive_data.highlights.map((highlight) => (
+                                            <span className="pill" key={highlight}>
+                                              {highlight}
+                                            </span>
+                                          ))}
+                                        </div>
+                                      )}
+                                    {Array.isArray(selectedLead.deep_dive_data?.emails_found) &&
+                                      selectedLead.deep_dive_data.emails_found.length > 0 && (
+                                        <div className="detail-grid deep-dive-links">
+                                          <div>
+                                            <span className="label">Emails Found</span>
+                                            <div className="profile-link-list">
+                                              {selectedLead.deep_dive_data.emails_found.map((entry, index) => {
+                                                const email =
+                                                  typeof entry === "string" ? entry : entry?.email || ""
+                                                const source =
+                                                  typeof entry === "string" ? "" : entry?.source || ""
+                                                if (!email) return null
+
+                                                return (
+                                                  <div key={`${email}-${index}`}>
+                                                    <a href={`mailto:${email}`}>{email}</a>
+                                                    {source && (
+                                                      <p className="muted">
+                                                        Source:{" "}
+                                                        <a href={source} target="_blank" rel="noreferrer">
+                                                          {source}
+                                                        </a>
+                                                      </p>
+                                                    )}
+                                                  </div>
+                                                )
+                                              })}
+                                            </div>
+                                          </div>
+                                        </div>
+                                      )}
+                                    {selectedLead.deep_dive_data?.profiles && (
+                                      <div className="detail-grid deep-dive-links">
+                                        {Object.entries(selectedLead.deep_dive_data.profiles)
+                                          .filter(([, urls]) => Array.isArray(urls) && urls.length > 0)
+                                          .map(([key, urls]) => (
+                                            <div key={key}>
+                                              <span className="label">{key.replaceAll("_", " ")}</span>
+                                              <div className="profile-link-list">
+                                                {urls.map((url) => (
+                                                  <a key={url} href={url} target="_blank" rel="noreferrer">
+                                                    {url}
+                                                  </a>
+                                                ))}
+                                              </div>
+                                            </div>
+                                          ))}
+                                      </div>
+                                    )}
+                                  </div>
+                                  <div className="detail-notes">
+                                    <span className="label">Social Profiles</span>
+                                    {!Array.isArray(selectedLead.social_profiles) ||
+                                    selectedLead.social_profiles.length === 0 ? (
+                                      <p>No social profiles saved yet. Run Deep Dive to discover them.</p>
+                                    ) : (
+                                      <div className="detail-grid deep-dive-links">
+                                        {selectedLead.social_profiles.map((profile) => (
+                                          <div key={profile.id || `${profile.profile_type}-${profile.url}`}>
+                                            <span className="label">
+                                              {profile.profile_type?.replaceAll("_", " ") || "profile"}
+                                            </span>
+                                            <div className="profile-link-list">
+                                              <div className="profile-link-row">
+                                                <a href={profile.url} target="_blank" rel="noreferrer">
+                                                  {profile.url}
+                                                </a>
+                                                {profile.id && (
+                                                  <button
+                                                    className="btn btn-link-danger btn-link-danger-sm"
+                                                    type="button"
+                                                    onClick={() =>
+                                                      handleDeleteSocialProfile(
+                                                        selectedLead.id,
+                                                        profile
+                                                      )
+                                                    }
+                                                    disabled={Boolean(
+                                                      profileDeletingById[profile.id]
+                                                    )}
+                                                  >
+                                                    {profileDeletingById[profile.id]
+                                                      ? "Deleting…"
+                                                      : "Delete"}
+                                                  </button>
+                                                )}
+                                              </div>
+                                              {profile.handle && <span className="muted">@{profile.handle}</span>}
+                                            </div>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    )}
+                                  </div>
+                                  <div className="detail-notes">
+                                    <span className="label">Suggested First Contact</span>
+                                    {selectedLead.deep_dive_data?.first_contact_suggestion ? (
+                                      <>
+                                        <p>
+                                          <strong>Method:</strong>{" "}
+                                          {selectedLead.deep_dive_data.first_contact_suggestion.method}
+                                        </p>
+                                        <p>
+                                          <strong>Channel:</strong>{" "}
+                                          {selectedLead.deep_dive_data.first_contact_suggestion.channel}
+                                        </p>
+                                        <p>
+                                          <strong>Subject / opener:</strong>{" "}
+                                          {selectedLead.deep_dive_data.first_contact_suggestion.subject_line}
+                                        </p>
+                                        <p>
+                                          <strong>Message:</strong>{" "}
+                                          {selectedLead.deep_dive_data.first_contact_suggestion.message}
+                                        </p>
+                                        <p>
+                                          <strong>Why:</strong>{" "}
+                                          {selectedLead.deep_dive_data.first_contact_suggestion.rationale}
+                                        </p>
+                                      </>
+                                    ) : (
+                                      <p>Click “Suggest First Contact” after Deep Dive completes.</p>
+                                    )}
+                                    {selectedLead.first_contact_error && (
+                                      <p className="muted">
+                                        <strong>Last error:</strong> {selectedLead.first_contact_error}
+                                      </p>
+                                    )}
+                                  </div>
                                   <div className="detail-communications">
                                     <div className="panel-header">
                                       <div>

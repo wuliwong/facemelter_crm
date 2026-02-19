@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.0].define(version: 2026_02_12_164416) do
+ActiveRecord::Schema[8.0].define(version: 2026_02_18_190500) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
 
@@ -27,6 +27,36 @@ ActiveRecord::Schema[8.0].define(version: 2026_02_12_164416) do
     t.datetime "updated_at", null: false
     t.index ["lead_id", "occurred_at"], name: "index_lead_communications_on_lead_id_and_occurred_at"
     t.index ["lead_id"], name: "index_lead_communications_on_lead_id"
+  end
+
+  create_table "lead_social_profiles", force: :cascade do |t|
+    t.bigint "lead_id", null: false
+    t.string "profile_type", null: false
+    t.string "url", null: false
+    t.string "handle"
+    t.string "source", default: "deep_dive", null: false
+    t.text "notes"
+    t.jsonb "metadata", default: {}, null: false
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["lead_id", "profile_type", "url"], name: "index_lead_social_profiles_uniqueness", unique: true
+    t.index ["lead_id"], name: "index_lead_social_profiles_on_lead_id"
+  end
+
+  create_table "lead_tuning_feedbacks", force: :cascade do |t|
+    t.bigint "organization_id", null: false
+    t.bigint "lead_id", null: false
+    t.bigint "user_id", null: false
+    t.string "rating", null: false
+    t.boolean "in_dataset", default: false, null: false
+    t.jsonb "training_example", default: {}, null: false
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["lead_id"], name: "index_lead_tuning_feedbacks_on_lead_id"
+    t.index ["organization_id", "in_dataset"], name: "index_lead_tuning_feedbacks_on_organization_id_and_in_dataset"
+    t.index ["organization_id", "lead_id"], name: "index_lead_tuning_feedbacks_on_organization_id_and_lead_id", unique: true
+    t.index ["organization_id"], name: "index_lead_tuning_feedbacks_on_organization_id"
+    t.index ["user_id"], name: "index_lead_tuning_feedbacks_on_user_id"
   end
 
   create_table "leads", force: :cascade do |t|
@@ -48,6 +78,14 @@ ActiveRecord::Schema[8.0].define(version: 2026_02_12_164416) do
     t.decimal "ai_confidence", precision: 4, scale: 3
     t.text "ai_reason"
     t.datetime "ai_last_scored_at"
+    t.string "deep_dive_status", default: "idle", null: false
+    t.datetime "deep_dive_last_run_at"
+    t.text "deep_dive_error"
+    t.jsonb "deep_dive_data", default: {}, null: false
+    t.string "website"
+    t.string "first_contact_status", default: "idle", null: false
+    t.datetime "first_contact_last_run_at"
+    t.text "first_contact_error"
     t.index ["organization_id"], name: "index_leads_on_organization_id"
   end
 
@@ -55,6 +93,7 @@ ActiveRecord::Schema[8.0].define(version: 2026_02_12_164416) do
     t.string "name"
     t.datetime "created_at", null: false
     t.datetime "updated_at", null: false
+    t.text "overview"
   end
 
   create_table "signals", force: :cascade do |t|
@@ -93,6 +132,10 @@ ActiveRecord::Schema[8.0].define(version: 2026_02_12_164416) do
   end
 
   add_foreign_key "lead_communications", "leads"
+  add_foreign_key "lead_social_profiles", "leads"
+  add_foreign_key "lead_tuning_feedbacks", "leads"
+  add_foreign_key "lead_tuning_feedbacks", "organizations"
+  add_foreign_key "lead_tuning_feedbacks", "users"
   add_foreign_key "leads", "organizations"
   add_foreign_key "signals", "leads"
   add_foreign_key "signals", "organizations"

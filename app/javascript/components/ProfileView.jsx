@@ -80,7 +80,7 @@ export default function ProfileView() {
       <section className="panel">
         <div className="panel-header">
           <div>
-            <h2>Profile</h2>
+            <h2>Account details</h2>
             <p className="muted">Update your personal details.</p>
           </div>
         </div>
@@ -106,7 +106,7 @@ export default function ProfileView() {
       <section className="panel">
         <div className="panel-header">
           <div>
-            <h2>Organization</h2>
+            <h2>Current organization</h2>
             <p className="muted">Current organization context.</p>
           </div>
         </div>

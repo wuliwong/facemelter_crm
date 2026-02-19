@@ -3,7 +3,7 @@ module Api
     def show
       organization = current_organization
       render json: {
-        organization: organization.slice(:id, :name),
+        organization: organization.slice(:id, :name, :overview),
         users: organization.users.order(:id).select(:id, :name, :email, :role)
       }
     end
@@ -14,7 +14,7 @@ module Api
 
       organization = current_organization
       if organization.update(organization_params)
-        render json: { organization: organization.slice(:id, :name) }
+        render json: { organization: organization.slice(:id, :name, :overview) }
       else
         render json: { errors: organization.errors.full_messages }, status: :unprocessable_entity
       end
@@ -23,7 +23,7 @@ module Api
     private
 
     def organization_params
-      params.require(:organization).permit(:name)
+      params.require(:organization).permit(:name, :overview)
     end
   end
 end

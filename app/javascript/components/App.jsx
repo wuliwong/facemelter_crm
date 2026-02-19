@@ -14,8 +14,8 @@ const TABS = [
 
 const TAB_COPY = {
   leads: {
-    title: "Lead Queue",
-    subtitle: "Track AI filmmakers, agencies, and partnership prospects."
+    title: "Leads",
+    subtitle: "Find, qualify, and manage outreach from one workspace."
   },
   dashboard: {
     title: "Dashboard",
@@ -23,11 +23,11 @@ const TAB_COPY = {
   },
   organization: {
     title: "Organization",
-    subtitle: "Manage your studio identity and member access."
+    subtitle: "Manage organization settings and member access."
   },
   profile: {
     title: "Profile",
-    subtitle: "Personal settings and account details."
+    subtitle: "Manage your account and connected data sources."
   }
 }
 

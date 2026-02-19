@@ -1,0 +1,19 @@
+one:
+  organization: one
+  lead: one
+  user: one
+  rating: up
+  in_dataset: true
+  training_example:
+    format: openai_chat_jsonl_v1
+    messages: []
+
+two:
+  organization: two
+  lead: two
+  user: two
+  rating: down
+  in_dataset: true
+  training_example:
+    format: openai_chat_jsonl_v1
+    messages: []

@@ -60,6 +60,12 @@ Rails.application.configure do
   config.solid_queue.connects_to = { database: { writing: :queue } }
   config.solid_queue.logger = ActiveSupport::Logger.new(STDOUT)
 
+  if ENV["RAILS_LOG_TO_STDOUT"].present?
+    stdout_logger = ActiveSupport::Logger.new(STDOUT)
+    stdout_logger.formatter = config.log_formatter
+    config.logger = ActiveSupport::TaggedLogging.new(stdout_logger)
+  end
+
   # Raises error for missing translations.
   # config.i18n.raise_on_missing_translations = true
 

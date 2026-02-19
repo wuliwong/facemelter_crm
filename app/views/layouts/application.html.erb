@@ -7,7 +7,7 @@
     <meta name="mobile-web-app-capable" content="yes">
     <%= csrf_meta_tags %>
     <%= csp_meta_tag %>
-    <meta name="ollama-model" content="<%= Rails.application.credentials.dig(:ollama, :model) || ENV["OLLAMA_MODEL"].to_s %>">
+    <meta name="ai-model" content="<%= AiProviderConfig.label %>">
     <meta name="asset-facemelter-icon" content="<%= asset_path("facemelter_icon.jpeg") %>">
     <meta name="asset-facemelter-logo-dark" content="<%= asset_path("facemelter_logo_darkbg.png") %>">
 

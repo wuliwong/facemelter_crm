@@ -40,6 +40,7 @@ const platformBucket = (platform) => {
 export default function DashboardView() {
   const [leads, setLeads] = useState([])
   const [loading, setLoading] = useState(true)
+  const [chartTooltip, setChartTooltip] = useState(null)
 
   useEffect(() => {
     apiRequest("/api/leads")
@@ -148,28 +149,63 @@ export default function DashboardView() {
     { time: "5d ago", title: "Outreach reply: wants demo walkthrough", tag: "Outreach" }
   ]
 
-  const renderBars = (values, className) => {
+  const showTooltip = (event, text) => {
+    setChartTooltip({
+      text,
+      x: event.clientX + 14,
+      y: event.clientY + 14
+    })
+  }
+
+  const hideTooltip = () => setChartTooltip(null)
+
+  const renderBars = (values, className, labels, metricLabel) => {
     const max = Math.max(...values, 1)
     return values.map((value, idx) => (
       <div
         key={`${className}-${idx}`}
         className={`bar ${className}`}
         style={{ height: `${(value / max) * 100}%` }}
+        aria-label={`${labels[idx]} ${metricLabel} ${value}`}
+        onMouseEnter={(event) => showTooltip(event, `${labels[idx]}: ${value} ${metricLabel}`)}
+        onMouseMove={(event) => showTooltip(event, `${labels[idx]}: ${value} ${metricLabel}`)}
+        onMouseLeave={hideTooltip}
       />
     ))
   }
 
-  const renderLinePath = (values) => {
+  const linePointData = (values) => {
     const max = Math.max(...values, 1)
-    const points = values
-      .map((value, idx) => {
-        const x = (idx / (values.length - 1)) * 100
-        const y = 100 - (value / max) * 100
-        return `${x},${y}`
-      })
+    const denominator = Math.max(values.length - 1, 1)
+    return values.map((value, idx) => {
+      const x = (idx / denominator) * 100
+      const y = 100 - (value / max) * 100
+      return { x, y, value }
+    })
+  }
+
+  const renderLinePath = (values) => {
+    const points = linePointData(values)
+      .map((point) => `${point.x},${point.y}`)
       .join(" ")
     return points
   }
+
+  const renderLinePoints = (values, labels) =>
+    linePointData(values).map((point, idx) => (
+      <circle
+        key={`line-point-${idx}`}
+        className="line-point"
+        cx={point.x}
+        cy={point.y}
+        r="2.3"
+        onMouseEnter={(event) => showTooltip(event, `${labels[idx]}: ${point.value}`)}
+        onMouseMove={(event) => showTooltip(event, `${labels[idx]}: ${point.value}`)}
+        onMouseLeave={hideTooltip}
+      >
+        <title>{`${labels[idx]}: ${point.value}`}</title>
+      </circle>
+    ))
 
   return (
     <div className="dashboard-grid">
@@ -214,7 +250,9 @@ export default function DashboardView() {
               <span>Leads added</span>
               <strong>Last 7 days</strong>
             </div>
-            <div className="bar-chart">{renderBars(chartData.activity.leads, "primary")}</div>
+            <div className="bar-chart">
+              {renderBars(chartData.activity.leads, "primary", chartData.dayLabels, "leads")}
+            </div>
             <div className="chart-labels">
               {chartData.dayLabels.map((day) => (
                 <span key={`leads-${day}`}>{day}</span>
@@ -226,7 +264,9 @@ export default function DashboardView() {
               <span>Outreach touches</span>
               <strong>Last 7 days</strong>
             </div>
-            <div className="bar-chart">{renderBars(chartData.activity.outreach, "secondary")}</div>
+            <div className="bar-chart">
+              {renderBars(chartData.activity.outreach, "secondary", chartData.dayLabels, "touches")}
+            </div>
             <div className="chart-labels">
               {chartData.dayLabels.map((day) => (
                 <span key={`outreach-${day}`}>{day}</span>
@@ -248,6 +288,7 @@ export default function DashboardView() {
                   strokeLinejoin="round"
                   points={renderLinePath(chartData.scoreTrendSeries)}
                 />
+                {renderLinePoints(chartData.scoreTrendSeries, chartData.dayLabels)}
               </svg>
             </div>
             <div className="chart-labels">
@@ -340,7 +381,14 @@ export default function DashboardView() {
                   strokeDasharray: `${chartData.mixPercent.youtube} ${100 - chartData.mixPercent.youtube}`,
                   strokeDashoffset: 0
                 }}
-              />
+                onMouseEnter={(event) => showTooltip(event, `YouTube: ${chartData.channelMix.youtube} (${chartData.mixPercent.youtube.toFixed(1)}%)`)}
+                onMouseMove={(event) => showTooltip(event, `YouTube: ${chartData.channelMix.youtube} (${chartData.mixPercent.youtube.toFixed(1)}%)`)}
+                onMouseLeave={hideTooltip}
+              >
+                <title>
+                  {`YouTube: ${chartData.channelMix.youtube} (${chartData.mixPercent.youtube.toFixed(1)}%)`}
+                </title>
+              </circle>
               <circle
                 className="pie-seg seg-two"
                 cx="21"
@@ -350,7 +398,14 @@ export default function DashboardView() {
                   strokeDasharray: `${chartData.mixPercent.x} ${100 - chartData.mixPercent.x}`,
                   strokeDashoffset: -chartData.mixPercent.youtube
                 }}
-              />
+                onMouseEnter={(event) => showTooltip(event, `X (Twitter): ${chartData.channelMix.x} (${chartData.mixPercent.x.toFixed(1)}%)`)}
+                onMouseMove={(event) => showTooltip(event, `X (Twitter): ${chartData.channelMix.x} (${chartData.mixPercent.x.toFixed(1)}%)`)}
+                onMouseLeave={hideTooltip}
+              >
+                <title>
+                  {`X (Twitter): ${chartData.channelMix.x} (${chartData.mixPercent.x.toFixed(1)}%)`}
+                </title>
+              </circle>
               <circle
                 className="pie-seg seg-three"
                 cx="21"
@@ -360,7 +415,14 @@ export default function DashboardView() {
                   strokeDasharray: `${chartData.mixPercent.linkedin} ${100 - chartData.mixPercent.linkedin}`,
                   strokeDashoffset: -(chartData.mixPercent.youtube + chartData.mixPercent.x)
                 }}
-              />
+                onMouseEnter={(event) => showTooltip(event, `LinkedIn: ${chartData.channelMix.linkedin} (${chartData.mixPercent.linkedin.toFixed(1)}%)`)}
+                onMouseMove={(event) => showTooltip(event, `LinkedIn: ${chartData.channelMix.linkedin} (${chartData.mixPercent.linkedin.toFixed(1)}%)`)}
+                onMouseLeave={hideTooltip}
+              >
+                <title>
+                  {`LinkedIn: ${chartData.channelMix.linkedin} (${chartData.mixPercent.linkedin.toFixed(1)}%)`}
+                </title>
+              </circle>
               <circle
                 className="pie-seg seg-four"
                 cx="21"
@@ -374,7 +436,14 @@ export default function DashboardView() {
                     chartData.mixPercent.linkedin
                   )
                 }}
-              />
+                onMouseEnter={(event) => showTooltip(event, `Web / Other: ${chartData.channelMix.other} (${chartData.mixPercent.other.toFixed(1)}%)`)}
+                onMouseMove={(event) => showTooltip(event, `Web / Other: ${chartData.channelMix.other} (${chartData.mixPercent.other.toFixed(1)}%)`)}
+                onMouseLeave={hideTooltip}
+              >
+                <title>
+                  {`Web / Other: ${chartData.channelMix.other} (${chartData.mixPercent.other.toFixed(1)}%)`}
+                </title>
+              </circle>
             </svg>
           </div>
           <div className="pie-legend">
@@ -417,6 +486,14 @@ export default function DashboardView() {
           ))}
         </div>
       </section>
+      {chartTooltip && (
+        <div
+          className="chart-hover-tooltip"
+          style={{ left: `${chartTooltip.x}px`, top: `${chartTooltip.y}px` }}
+        >
+          {chartTooltip.text}
+        </div>
+      )}
     </div>
   )
 }

@@ -16,8 +16,15 @@ Rails.application.routes.draw do
     resource :organization, only: [:show, :update]
     resources :users, only: [:index, :update, :destroy]
     resources :leads do
+      get :tuning_dataset, on: :collection
       post :requalify, on: :member
+      post :tuning_feedback, on: :member
+      post :deep_dive, on: :member
+      post :suggest_first_contact, on: :member
+      get :dossier, on: :member
       resources :communications, controller: "lead_communications", only: [:index, :create, :update, :destroy]
+      resources :social_profiles, controller: "lead_social_profiles", only: [:destroy]
+      delete :social_profiles, on: :member, to: "lead_social_profiles#destroy_all"
     end
     post "x/search", to: "x_search#create"
     post "linkedin/search", to: "linkedin_search#create"

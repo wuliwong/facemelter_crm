@@ -4,7 +4,10 @@ class LeadCommunication < ApplicationRecord
   CHANNEL_VALUES = %w[
     x_dm
     x_comment
+    followed_on_x
     linkedin_dm
+    linkedin_comment
+    connected_on_linkedin
     email
     youtube_comment
     instagram_dm

@@ -7,6 +7,7 @@ class User < ApplicationRecord
   attr_accessor :organization_name
 
   belongs_to :organization
+  has_many :lead_tuning_feedbacks, dependent: :destroy
 
   enum :role, { admin: "admin", member: "member" }, default: "admin"
 
