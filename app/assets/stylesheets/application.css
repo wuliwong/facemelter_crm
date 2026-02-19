@@ -766,12 +766,28 @@ a:hover {
   flex-wrap: wrap;
 }
 
+.communication-item-meta {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-left: auto;
+}
+
 .communication-item-times {
   display: flex;
   flex-direction: column;
   gap: 4px;
   color: var(--muted);
   font-size: 0.85rem;
+}
+
+.communication-item-actions {
+  display: flex;
+  align-items: center;
+}
+
+.communication-edit-form {
+  margin-top: 10px;
 }
 
 .communication-item p {

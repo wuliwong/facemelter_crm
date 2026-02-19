@@ -160,6 +160,21 @@ const emptyCommunicationForm = (channelOptions = COMMUNICATION_CHANNEL_OPTIONS) 
   notes: ""
 })
 
+const communicationToForm = (
+  communication,
+  channelOptions = COMMUNICATION_CHANNEL_OPTIONS
+) => ({
+  channel: communication?.channel || channelOptions[0] || "other",
+  outcome: communication?.outcome || "sent",
+  occurred_at: toDateTimeInputValue(communication?.occurred_at),
+  responded_at: communication?.responded_at
+    ? toDateTimeInputValue(communication.responded_at)
+    : "",
+  link: communication?.link || "",
+  summary: communication?.summary || "",
+  notes: communication?.notes || ""
+})
+
 const normalizeHandle = (value) => (value || "").toString().trim()
 const HIDDEN_BY_DEFAULT_STATUSES = new Set(["closed", "archived"])
 
@@ -322,6 +337,11 @@ export default function LeadsView({ searchTerm = "" }) {
   const [communicationForm, setCommunicationForm] = useState(() => emptyCommunicationForm())
   const [communicationSaving, setCommunicationSaving] = useState(false)
   const [communicationLoading, setCommunicationLoading] = useState(false)
+  const [communicationEditingId, setCommunicationEditingId] = useState(null)
+  const [communicationEditForm, setCommunicationEditForm] = useState(() =>
+    emptyCommunicationForm()
+  )
+  const [communicationEditSaving, setCommunicationEditSaving] = useState(false)
   const [aiRescoring, setAiRescoring] = useState({})
   const [aiMessages, setAiMessages] = useState({})
   const [deepDiving, setDeepDiving] = useState({})
@@ -395,6 +415,8 @@ export default function LeadsView({ searchTerm = "" }) {
   useEffect(() => {
     if (!selectedLeadId) return
     setCommunicationForm(emptyCommunicationForm(communicationOptions.channels))
+    setCommunicationEditingId(null)
+    setCommunicationEditForm(emptyCommunicationForm(communicationOptions.channels))
     fetchLeadCommunications(selectedLeadId)
   }, [selectedLeadId])
 
@@ -525,6 +547,23 @@ export default function LeadsView({ searchTerm = "" }) {
     setCommunicationForm((prev) => ({ ...prev, [name]: value }))
   }
 
+  const handleCommunicationEditChange = (event) => {
+    const { name, value } = event.target
+    setCommunicationEditForm((prev) => ({ ...prev, [name]: value }))
+  }
+
+  const startCommunicationEdit = (communication) => {
+    setCommunicationEditingId(communication.id)
+    setCommunicationEditForm(
+      communicationToForm(communication, communicationOptions.channels)
+    )
+  }
+
+  const cancelCommunicationEdit = () => {
+    setCommunicationEditingId(null)
+    setCommunicationEditForm(emptyCommunicationForm(communicationOptions.channels))
+  }
+
   const handleCreateCommunication = async (event, leadId) => {
     event.preventDefault()
     if (!leadId) return
@@ -555,6 +594,42 @@ export default function LeadsView({ searchTerm = "" }) {
       setError(err)
     } finally {
       setCommunicationSaving(false)
+    }
+  }
+
+  const handleUpdateCommunication = async (event, leadId, communicationId) => {
+    event.preventDefault()
+    if (!leadId || !communicationId) return
+
+    setCommunicationEditSaving(true)
+    setError(null)
+
+    try {
+      const payload = {
+        ...communicationEditForm,
+        responded_at: communicationEditForm.responded_at || null,
+        link: communicationEditForm.link || null,
+        summary: communicationEditForm.summary || null,
+        notes: communicationEditForm.notes || null
+      }
+
+      const data = await apiRequest(`/api/leads/${leadId}/communications/${communicationId}`, {
+        method: "PATCH",
+        body: { communication: payload }
+      })
+
+      setCommunicationsByLead((prev) => ({
+        ...prev,
+        [leadId]: (prev[leadId] || []).map((entry) =>
+          entry.id === communicationId ? data.communication : entry
+        )
+      }))
+      setCommunicationEditingId(null)
+      setCommunicationEditForm(emptyCommunicationForm(communicationOptions.channels))
+    } catch (err) {
+      setError(err)
+    } finally {
+      setCommunicationEditSaving(false)
     }
   }
 
@@ -2219,46 +2294,195 @@ export default function LeadsView({ searchTerm = "" }) {
                                     {!communicationLoading &&
                                       selectedLeadCommunications.length > 0 && (
                                         <div className="communication-list">
-                                          {selectedLeadCommunications.map((communication) => (
-                                            <article
-                                              key={communication.id}
-                                              className="communication-item"
-                                            >
-                                              <div className="communication-item-head">
-                                                <div className="detail-tags">
-                                                  <span className="pill">
-                                                    {communication.channel.replaceAll("_", " ")}
-                                                  </span>
-                                                  <span className="pill">
-                                                    {communication.outcome.replaceAll("_", " ")}
-                                                  </span>
-                                                </div>
-                                                <div className="communication-item-times">
-                                                  <span>
-                                                    Contacted {formatTimestamp(communication.occurred_at)}
-                                                  </span>
-                                                  {communication.responded_at && (
-                                                    <span>
-                                                      Responded {formatTimestamp(communication.responded_at)}
+                                          {selectedLeadCommunications.map((communication) => {
+                                            const isEditing =
+                                              communicationEditingId === communication.id
+
+                                            return (
+                                              <article
+                                                key={communication.id}
+                                                className="communication-item"
+                                              >
+                                                <div className="communication-item-head">
+                                                  <div className="detail-tags">
+                                                    <span className="pill">
+                                                      {communication.channel.replaceAll("_", " ")}
                                                     </span>
-                                                  )}
+                                                    <span className="pill">
+                                                      {communication.outcome.replaceAll("_", " ")}
+                                                    </span>
+                                                  </div>
+                                                  <div className="communication-item-meta">
+                                                    <div className="communication-item-times">
+                                                      <span>
+                                                        Contacted{" "}
+                                                        {formatTimestamp(communication.occurred_at)}
+                                                      </span>
+                                                      {communication.responded_at && (
+                                                        <span>
+                                                          Responded{" "}
+                                                          {formatTimestamp(communication.responded_at)}
+                                                        </span>
+                                                      )}
+                                                    </div>
+                                                    <div className="communication-item-actions">
+                                                      <button
+                                                        className="btn ghost btn-sm"
+                                                        type="button"
+                                                        onClick={() =>
+                                                          startCommunicationEdit(communication)
+                                                        }
+                                                        disabled={
+                                                          communicationEditSaving &&
+                                                          isEditing
+                                                        }
+                                                      >
+                                                        Edit
+                                                      </button>
+                                                    </div>
+                                                  </div>
                                                 </div>
-                                              </div>
-                                              {communication.summary && <p>{communication.summary}</p>}
-                                              {communication.link && (
-                                                <p>
-                                                  <a
-                                                    href={communication.link}
-                                                    target="_blank"
-                                                    rel="noreferrer"
+
+                                                {isEditing ? (
+                                                  <form
+                                                    className="form-grid communication-edit-form"
+                                                    onSubmit={(event) =>
+                                                      handleUpdateCommunication(
+                                                        event,
+                                                        selectedLead.id,
+                                                        communication.id
+                                                      )
+                                                    }
                                                   >
-                                                    {communication.link}
-                                                  </a>
-                                                </p>
-                                              )}
-                                              {communication.notes && <p>{communication.notes}</p>}
-                                            </article>
-                                          ))}
+                                                    <label>
+                                                      Channel
+                                                      <select
+                                                        name="channel"
+                                                        value={communicationEditForm.channel}
+                                                        onChange={handleCommunicationEditChange}
+                                                        required
+                                                      >
+                                                        {communicationOptions.channels.map(
+                                                          (channel) => (
+                                                            <option
+                                                              key={channel}
+                                                              value={channel}
+                                                            >
+                                                              {channel.replaceAll("_", " ")}
+                                                            </option>
+                                                          )
+                                                        )}
+                                                      </select>
+                                                    </label>
+                                                    <label>
+                                                      Outcome
+                                                      <select
+                                                        name="outcome"
+                                                        value={communicationEditForm.outcome}
+                                                        onChange={handleCommunicationEditChange}
+                                                        required
+                                                      >
+                                                        {communicationOptions.outcomes.map(
+                                                          (outcome) => (
+                                                            <option
+                                                              key={outcome}
+                                                              value={outcome}
+                                                            >
+                                                              {outcome.replaceAll("_", " ")}
+                                                            </option>
+                                                          )
+                                                        )}
+                                                      </select>
+                                                    </label>
+                                                    <label>
+                                                      Contacted at
+                                                      <input
+                                                        type="datetime-local"
+                                                        name="occurred_at"
+                                                        value={communicationEditForm.occurred_at}
+                                                        onChange={handleCommunicationEditChange}
+                                                        required
+                                                      />
+                                                    </label>
+                                                    <label>
+                                                      Responded at
+                                                      <input
+                                                        type="datetime-local"
+                                                        name="responded_at"
+                                                        value={communicationEditForm.responded_at}
+                                                        onChange={handleCommunicationEditChange}
+                                                      />
+                                                    </label>
+                                                    <label className="span-2">
+                                                      Link
+                                                      <input
+                                                        name="link"
+                                                        value={communicationEditForm.link}
+                                                        onChange={handleCommunicationEditChange}
+                                                        placeholder="https://..."
+                                                      />
+                                                    </label>
+                                                    <label className="span-2">
+                                                      Summary
+                                                      <input
+                                                        name="summary"
+                                                        value={communicationEditForm.summary}
+                                                        onChange={handleCommunicationEditChange}
+                                                        maxLength={500}
+                                                      />
+                                                    </label>
+                                                    <label className="span-2">
+                                                      Notes
+                                                      <textarea
+                                                        name="notes"
+                                                        value={communicationEditForm.notes}
+                                                        onChange={handleCommunicationEditChange}
+                                                      />
+                                                    </label>
+                                                    <div className="span-2 form-actions">
+                                                      <button
+                                                        className="btn"
+                                                        type="submit"
+                                                        disabled={communicationEditSaving}
+                                                      >
+                                                        {communicationEditSaving
+                                                          ? "Saving…"
+                                                          : "Save Contact Log"}
+                                                      </button>
+                                                      <button
+                                                        className="btn ghost"
+                                                        type="button"
+                                                        onClick={cancelCommunicationEdit}
+                                                        disabled={communicationEditSaving}
+                                                      >
+                                                        Cancel
+                                                      </button>
+                                                    </div>
+                                                  </form>
+                                                ) : (
+                                                  <>
+                                                    {communication.summary && (
+                                                      <p>{communication.summary}</p>
+                                                    )}
+                                                    {communication.link && (
+                                                      <p>
+                                                        <a
+                                                          href={communication.link}
+                                                          target="_blank"
+                                                          rel="noreferrer"
+                                                        >
+                                                          {communication.link}
+                                                        </a>
+                                                      </p>
+                                                    )}
+                                                    {communication.notes && (
+                                                      <p>{communication.notes}</p>
+                                                    )}
+                                                  </>
+                                                )}
+                                              </article>
+                                            )
+                                          })}
                                         </div>
                                       )}
                                   </div>
